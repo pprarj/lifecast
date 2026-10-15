@@ -5,7 +5,7 @@
 Lifecast is a modern interface for RaceMenu's character editor, built on
 Meridian UI.
 
-**Status: released.** Version 1.2.1 is available on
+**Status: released.** Version 1.2.2 is available on
 [Nexus Mods](https://www.nexusmods.com/skyrimspecialedition/mods/193940). Bug reports
 go to the Bugs tab there, or to this repository's issues.
 
