@@ -198,13 +198,13 @@
     const engineOf = new Map(ENGINE.map((e, i) => [e[0], [i, e[1], e[2]]]));
     // The Russian game labels the same 18 in Russian: the same rows, by alias.
     const RU = {
-      "Длина носа": "Nose Length", "Высота носа": "Nose Height",
-      "Высота челюсти": "Jaw Height", "Ширина челюсти": "Jaw Width", "Челюсть вперед": "Jaw Forward",
-      "Высота скул": "Cheekbone Height", "Ширина скул": "Cheekbone Width",
-      "Высота глаз": "Eye Height", "Расстояние между глазами": "Eye Width", "Глубина глазниц": "Eye Depth",
-      "Высота бровей": "Brow Height", "Ширина бровей": "Brow Width", "Брови вперед": "Brow Forward",
-      "Высота губ": "Mouth Height", "Губы вперед": "Mouth Forward",
-      "Ширина подбородка": "Chin Width", "Длина подбородка": "Chin Length", "Подбородок вперед": "Chin Forward",
+      "\u0414\u043b\u0438\u043d\u0430 \u043d\u043e\u0441\u0430": "Nose Length", "\u0412\u044b\u0441\u043e\u0442\u0430 \u043d\u043e\u0441\u0430": "Nose Height",
+      "\u0412\u044b\u0441\u043e\u0442\u0430 \u0447\u0435\u043b\u044e\u0441\u0442\u0438": "Jaw Height", "\u0428\u0438\u0440\u0438\u043d\u0430 \u0447\u0435\u043b\u044e\u0441\u0442\u0438": "Jaw Width", "\u0427\u0435\u043b\u044e\u0441\u0442\u044c \u0432\u043f\u0435\u0440\u0435\u0434": "Jaw Forward",
+      "\u0412\u044b\u0441\u043e\u0442\u0430 \u0441\u043a\u0443\u043b": "Cheekbone Height", "\u0428\u0438\u0440\u0438\u043d\u0430 \u0441\u043a\u0443\u043b": "Cheekbone Width",
+      "\u0412\u044b\u0441\u043e\u0442\u0430 \u0433\u043b\u0430\u0437": "Eye Height", "\u0420\u0430\u0441\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u043c\u0435\u0436\u0434\u0443 \u0433\u043b\u0430\u0437\u0430\u043c\u0438": "Eye Width", "\u0413\u043b\u0443\u0431\u0438\u043d\u0430 \u0433\u043b\u0430\u0437\u043d\u0438\u0446": "Eye Depth",
+      "\u0412\u044b\u0441\u043e\u0442\u0430 \u0431\u0440\u043e\u0432\u0435\u0439": "Brow Height", "\u0428\u0438\u0440\u0438\u043d\u0430 \u0431\u0440\u043e\u0432\u0435\u0439": "Brow Width", "\u0411\u0440\u043e\u0432\u0438 \u0432\u043f\u0435\u0440\u0435\u0434": "Brow Forward",
+      "\u0412\u044b\u0441\u043e\u0442\u0430 \u0433\u0443\u0431": "Mouth Height", "\u0413\u0443\u0431\u044b \u0432\u043f\u0435\u0440\u0435\u0434": "Mouth Forward",
+      "\u0428\u0438\u0440\u0438\u043d\u0430 \u043f\u043e\u0434\u0431\u043e\u0440\u043e\u0434\u043a\u0430": "Chin Width", "\u0414\u043b\u0438\u043d\u0430 \u043f\u043e\u0434\u0431\u043e\u0440\u043e\u0434\u043a\u0430": "Chin Length", "\u041f\u043e\u0434\u0431\u043e\u0440\u043e\u0434\u043e\u043a \u0432\u043f\u0435\u0440\u0435\u0434": "Chin Forward",
     };
     for (const ru in RU) {
       if (engineOf.has(RU[ru])) {
