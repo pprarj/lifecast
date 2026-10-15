@@ -30,9 +30,14 @@
 
 namespace Lifecast::Core::MeridianLink
 {
-	// Registers the listener for Meridian's own messages and stores the
-	// ready-callback. Call once from SKSEPluginLoad.
+	// Logs the versions this build was compiled against. Call once from
+	// SKSEPluginLoad. It registers nothing: see ListenToMeridian().
 	void Init();
+
+	// Registers the listener for Meridian's own messages and stores the
+	// ready-callback. Call once, from the SKSE kPostLoad message: older SKSE
+	// refuses a named listener for a plugin that has not loaded yet.
+	void ListenToMeridian();
 
 	// Hands an SKSE lifecycle message to the Meridian loader, which is what
 	// dispatches RequestVersion at kPostPostLoad and RequestAPI at

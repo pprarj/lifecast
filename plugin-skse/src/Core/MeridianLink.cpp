@@ -47,12 +47,36 @@ namespace Lifecast::Core::MeridianLink
 			MUI::NifScene::ACTOR_APPEARANCE_INTERFACE_VERSION,
 			MUI::Input::INTERFACE_VERSION,
 			MUI::RenderLayer::INTERFACE_VERSION);
+	}
 
-		MUI::SKSELoader::GetUIPlatformAPIWithVersionCheck([](MUI::IUIPlatformAPI* a_api) {
+	void ListenToMeridian()
+	{
+		// Same two steps as SKSELoader::GetUIPlatformAPIWithVersionCheck, done
+		// here so the result of the registration can be read. Before SKSE
+		// 2.1.5 a named listener can only be registered for a plugin that has
+		// already loaded, and the plugin list is built as each one loads; from
+		// kPostLoad on every plugin is in it. Registering from the plugin's
+		// load entry point fails there whenever this DLL loads before
+		// MeridianUI.dll.
+		MUI::SKSELoader::LoaderData::s_apiReadyCallback = [](MUI::IUIPlatformAPI* a_api) {
 			g_platform = a_api;
 			spdlog::info("[meridian] platform API ready: {}",
 				static_cast<const void*>(a_api));
-		});
+		};
+
+		const bool registered = SKSE::GetMessagingInterface()->RegisterListener(
+			MUI::LibVersion::PROJECT_NAME,
+			[](SKSE::MessagingInterface::Message* a_msg) {
+				MUI::SKSELoader::ProcessSKSEMessage(a_msg);
+			});
+
+		if (registered) {
+			spdlog::info("[meridian] listening to MeridianUI from kPostLoad");
+		} else {
+			spdlog::error(
+				"[meridian] listening to MeridianUI from kPostLoad failed - "
+				"MeridianUI is not loaded; there will be no panel");
+		}
 	}
 
 	void ForwardSKSEMessage(SKSE::MessagingInterface::Message* a_msg)

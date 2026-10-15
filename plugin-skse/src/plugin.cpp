@@ -77,6 +77,12 @@ namespace
 #endif
 
 		switch (a_msg->type) {
+		case SKSE::MessagingInterface::kPostLoad:
+			// Every plugin has loaded, so a listener named for MeridianUI can
+			// be registered on any SKSE version (see MeridianLink.cpp).
+			Lifecast::Core::MeridianLink::ListenToMeridian();
+			break;
+
 		case SKSE::MessagingInterface::kPostPostLoad:
 			// The OBody plugin interface is requested here, the moment OBody's
 			// own header documents. Asking there is what makes a negative mean
