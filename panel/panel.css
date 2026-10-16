@@ -1286,6 +1286,7 @@ html[data-belt-region] .section.is-region .preset-list {
   bottom: calc(var(--belt-height) + var(--name-row) + var(--gap) * 3 + var(--control-lift, 0px));
   display: flex;
   flex-wrap: wrap;   /* E3: at a large scale the row is wider than the stage; it wraps instead of running off */
+  justify-content: center;   /* E4: each wrapped line sits centred in the bar; one line fills it, so nothing moves */
   max-width: calc(100vw - var(--gap) * 6);
   align-items: center;
   gap: calc(6px * var(--panel-scale));
