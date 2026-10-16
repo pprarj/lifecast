@@ -14,11 +14,14 @@
      region (All, search and Changed take the whole height). */
   --panel-width: 430px;
   --panel-scale: 1;
-  --belt-height: 48px;
+  /* The column the small panel takes: the width grows with the scale, but never past this share of the screen
+     (E3) - at 250% on a 2560 screen the rest of the belt has to fit beside it. */
+  --panel-col: min(calc(var(--panel-width) * var(--panel-scale)), 34vw);
+  --belt-height: calc(48px * var(--panel-scale));
   /* The name row over the belt, only on the narrow belt (D136); 0 otherwise,
      so everything placed from the bottom adds it unconditionally. */
   --name-row: 0px;
-  --finder-height: 40px;
+  --finder-height: calc(40px * var(--panel-scale));
   --panel-tall: 64vh;
   /* The skin: near-black with a green tint, light text, light green accent.
      --warn and --bad are not part of it and keep their values. --ok is the
@@ -40,21 +43,21 @@
   --scrollbar-thumb: rgba(255, 255, 255, 0.28);
   --scrollbar-track: rgba(255, 255, 255, 0.04);
   --font: "Segoe UI", system-ui, sans-serif;
-  --gap: 8px;
+  --gap: calc(8px * var(--panel-scale));
   /* Type and spacing chosen by eye (D114: compact, strong titles).
      They are variables so a later skin or density changes them without
      touching a rule. */
-  --text-size: 12.5px;
-  --title-size: 22px;
+  --text-size: calc(12.5px * var(--panel-scale));
+  --title-size: calc(22px * var(--panel-scale));
   --title-weight: 700;
-  --section-title-size: 14px;
+  --section-title-size: calc(14px * var(--panel-scale));
   --section-title-weight: 700;
   --section-title-color: var(--text);
-  --group-size: 12px;
+  --group-size: calc(12px * var(--panel-scale));
   --group-weight: 700;
   --group-color: var(--accent);
-  --section-head-pad: 3px;
-  --slider-gap: 2px;
+  --section-head-pad: calc(3px * var(--panel-scale));
+  --slider-gap: calc(2px * var(--panel-scale));
   /* How long a section takes to open and shut (D115). ZERO is the off
      switch: it gives back the instant toggle with no code touched. 160 ms
      with ease is what was watched in the probe - an inference from
@@ -77,8 +80,8 @@
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: calc(10px * var(--panel-scale));
+  height: calc(10px * var(--panel-scale));
 }
 
 ::-webkit-scrollbar-track {
@@ -87,7 +90,7 @@
 
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
-  border-radius: 5px;
+  border-radius: calc(5px * var(--panel-scale));
 }
 
 /* The hidden attribute must win over the display of any class below: a row
@@ -104,7 +107,7 @@ body {
   background: transparent;
   color: var(--text);
   font-family: var(--font);
-  font-size: 14px;
+  font-size: calc(14px * var(--panel-scale));
   overflow: hidden;
 }
 
@@ -117,9 +120,9 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  font-size: calc(var(--text-size) * var(--panel-scale));
+  font-size: var(--text-size);
   display: grid;
-  grid-template-columns: calc(var(--panel-width) * var(--panel-scale)) minmax(var(--belt-min, min-content), max-content) minmax(0, 1fr) auto;
+  grid-template-columns: var(--panel-col) minmax(var(--belt-min, min-content), max-content) minmax(0, 1fr) auto;
   grid-template-rows: auto var(--belt-height);
 }
 
@@ -130,7 +133,7 @@ body {
   grid-row: 2;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: calc(6px * var(--panel-scale));
   padding: 0 calc(var(--gap) * 1.5);
   background: var(--panel-bg);
   border-top: 1px solid var(--panel-border);
@@ -152,21 +155,21 @@ body {
    open one is underlined in the accent. */
 .belt-cats {
   grid-column: 2;
-  gap: 2px;
+  gap: calc(2px * var(--panel-scale));
   border-right: 1px solid var(--panel-border);
 }
 
 .belt-cat {
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--panel-scale));
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-dim);
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
-  padding: 8px 10px 6px;
+  border-bottom: calc(2px * var(--panel-scale)) solid transparent;
+  padding: calc(8px * var(--panel-scale)) calc(10px * var(--panel-scale)) calc(6px * var(--panel-scale));
   cursor: pointer;
   white-space: nowrap;
 }
@@ -181,8 +184,8 @@ body {
 }
 
 .belt-count {
-  margin-left: 5px;
-  font-size: 11px;
+  margin-left: calc(5px * var(--panel-scale));
+  font-size: calc(11px * var(--panel-scale));
   font-weight: 400;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
@@ -191,12 +194,12 @@ body {
 /* The always-visible buttons (D126), after the categories. */
 .belt-sep {
   align-self: stretch;
-  margin: 10px 6px;
+  margin: calc(10px * var(--panel-scale)) calc(6px * var(--panel-scale));
   border-left: 1px solid var(--panel-border);
 }
 
 .belt-quick {
-  margin-left: 4px;
+  margin-left: calc(4px * var(--panel-scale));
   white-space: nowrap;
 }
 
@@ -204,14 +207,14 @@ body {
 .belt-quick-group {
   display: flex;
   align-items: center;
-  gap: 2px;   /* the belt's own gap, as when the buttons were its children */
+  gap: calc(2px * var(--panel-scale));   /* the belt's own gap, as when the buttons were its children */
 }
 
 /* The strip of categories (D146): it takes the room the belt has and scrolls
    past it. Its minimum is DECLARED, and belt.js's fit() counts that, not the
    content - see the comment there. */
 .belt-cats {
-  --belt-track-min: 140px;
+  --belt-track-min: 40px;   /* NOT scaled (E3): at 250% the quick buttons need the room, the strip scrolls */
 }
 
 .belt-track {
@@ -219,7 +222,7 @@ body {
   min-width: var(--belt-track-min);
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: calc(2px * var(--panel-scale));
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -232,9 +235,9 @@ body {
 .belt-arrow {
   flex: none;
   box-sizing: border-box;
-  width: 30px;
-  padding: 2px 0;
-  font-size: 11px;
+  width: calc(30px * var(--panel-scale));
+  padding: calc(2px * var(--panel-scale)) 0;
+  font-size: calc(11px * var(--panel-scale));
 }
 
 .belt-arrow[hidden] {
@@ -246,13 +249,13 @@ body {
    counts go, and the name and Finish go up to a row of their own over the
    belt; the quick buttons stay (D146). */
 html[data-belt-narrow] {
-  --name-row: 44px;
+  --name-row: calc(44px * var(--panel-scale));
 }
 
 /* The name's column is empty on the narrow belt: the categories' column
    grows into the room instead, so the belt stays one band. */
 html[data-belt-narrow] .panel {
-  grid-template-columns: calc(var(--panel-width) * var(--panel-scale)) minmax(var(--belt-min, min-content), 1fr) 0 auto;
+  grid-template-columns: var(--panel-col) minmax(var(--belt-min, min-content), 1fr) 0 auto;
 }
 
 html[data-belt-narrow] .belt-count {
@@ -307,7 +310,7 @@ html[data-belt-wide] .belt-panel {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: calc(4px * var(--panel-scale));
   padding: var(--gap) calc(var(--gap) * 1.5);
   border-bottom: 1px solid var(--panel-border);
 }
@@ -324,12 +327,12 @@ html:not([data-belt-wide]) .belt-head #row-counter {
 
 .region-chip {
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--panel-scale));
   color: var(--text-dim);
   background: transparent;
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
-  padding: 3px 8px;
+  border-radius: calc(4px * var(--panel-scale));
+  padding: calc(3px * var(--panel-scale)) calc(8px * var(--panel-scale));
   cursor: pointer;
 }
 
@@ -382,7 +385,7 @@ html[data-belt-region] #sections > .group-heading {
 }
 
 .status {
-  font-size: 12px;
+  font-size: calc(12px * var(--panel-scale));
 }
 
 /* In Settings > Debug (D133), one line above the versions. */
@@ -413,14 +416,14 @@ html[data-belt-region] #sections > .group-heading {
 }
 
 .versions {
-  font-size: 11px;
+  font-size: calc(11px * var(--panel-scale));
   color: var(--text-dim);
 }
 
 .scale-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: calc(6px * var(--panel-scale));
 }
 
 .scale-group .versions {
@@ -430,13 +433,14 @@ html[data-belt-region] #sections > .group-heading {
 }
 
 .panel-button {
+  white-space: nowrap;
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--panel-scale));
   color: var(--text);
   background: transparent;
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
-  padding: 4px 10px;
+  border-radius: calc(4px * var(--panel-scale));
+  padding: calc(4px * var(--panel-scale)) calc(10px * var(--panel-scale));
   cursor: pointer;
 }
 
@@ -466,7 +470,7 @@ select.panel-button option {
 }
 
 #to-racemenu {
-  padding: 6px 14px;
+  padding: calc(6px * var(--panel-scale)) calc(14px * var(--panel-scale));
 }
 
 .panel-button:disabled {
@@ -484,7 +488,7 @@ select.panel-button option {
 .panel-toolbar .finish-row {
   position: relative;
   flex: 1;
-  max-width: 460px;
+  max-width: calc(460px * var(--panel-scale));
 }
 
 /* Search and the "changed" filter (D129, F43): the top row of the small
@@ -496,7 +500,7 @@ select.panel-button option {
   height: var(--finder-height);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: calc(6px * var(--panel-scale));
   padding: 0 calc(var(--gap) * 1.5);
   border-bottom: 1px solid var(--panel-border);
 }
@@ -539,7 +543,7 @@ html:not([data-belt-open]) .finder {
    size up so it reads as a level above rather than another section. */
 .group-heading {
   margin-top: calc(var(--gap) * 1.5);
-  margin-bottom: 4px;
+  margin-bottom: calc(4px * var(--panel-scale));
   font-size: var(--group-size);
   font-weight: var(--group-weight);
   letter-spacing: 0.12em;
@@ -558,7 +562,7 @@ html:not([data-belt-open]) .finder {
 .section-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: calc(8px * var(--panel-scale));
   width: 100%;
   padding: var(--section-head-pad) 0;
   font: inherit;
@@ -583,9 +587,9 @@ html:not([data-belt-open]) .finder {
   flex: none;
   width: 0;
   height: 0;
-  border-left: 5px solid var(--text-dim);
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
+  border-left: calc(5px * var(--panel-scale)) solid var(--text-dim);
+  border-top: calc(4px * var(--panel-scale)) solid transparent;
+  border-bottom: calc(4px * var(--panel-scale)) solid transparent;
 }
 
 .section[data-open="1"] > .section-head .section-caret {
@@ -644,27 +648,27 @@ html:not([data-belt-open]) .finder {
 .picker-hex-edit {
   width: 5.5em;
   box-sizing: border-box;
-  padding: 0 4px;
+  padding: 0 calc(4px * var(--panel-scale));
   font: inherit;
   text-align: right;
   color: var(--text);
   background: var(--field-bg);
   border: 1px solid var(--panel-border);
-  border-radius: 3px;
+  border-radius: calc(3px * var(--panel-scale));
 }
 
 .slider-name {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: calc(8px * var(--panel-scale));
 }
 
 /* A dot for "moved from where it opened" (E2 item 4). The row itself sets
    data-changed in controls.js - this only draws what is already decided. */
 .slider[data-changed="1"] .slider-name::before {
   content: "";
-  width: 6px;
-  height: 6px;
+  width: calc(6px * var(--panel-scale));
+  height: calc(6px * var(--panel-scale));
   border-radius: 50%;
   background: var(--accent);
   flex-shrink: 0;
@@ -675,7 +679,7 @@ html:not([data-belt-open]) .finder {
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: calc(6px * var(--panel-scale));
 }
 
 .slider-track input[type="range"] {
@@ -686,15 +690,15 @@ html:not([data-belt-open]) .finder {
 
 .step-button {
   font: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--panel-scale));
   line-height: 1;
-  width: 22px;
-  height: 22px;
+  width: calc(22px * var(--panel-scale));
+  height: calc(22px * var(--panel-scale));
   padding: 0;
   color: var(--text);
   background: transparent;
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
+  border-radius: calc(4px * var(--panel-scale));
   cursor: pointer;
 }
 
@@ -714,7 +718,7 @@ html:not([data-belt-open]) .finder {
    section with no slider is not .is-flat and keeps its own look. */
 html[data-belt-all] #sections > .section.is-flat > .section-body {
   display: block;
-  padding-top: 4px;
+  padding-top: calc(4px * var(--panel-scale));
 }
 
 html[data-belt-all] #sections > .section.is-flat > .section-head {
@@ -729,9 +733,9 @@ html[data-belt-all] .section.is-flat .slider {
   grid-template-columns: minmax(0, 40%) minmax(0, 1fr) auto;
   grid-template-areas: "name track value";
   align-items: center;
-  column-gap: 8px;
+  column-gap: calc(8px * var(--panel-scale));
   row-gap: 0;
-  margin-bottom: 2px;
+  margin-bottom: calc(2px * var(--panel-scale));
 }
 
 html[data-belt-all] .section.is-flat .slider-name {
@@ -744,7 +748,7 @@ html[data-belt-all] .section.is-flat .slider-name {
 
 html[data-belt-all] .section.is-flat .slider[data-changed="1"] .slider-name::before {
   display: inline-block;
-  margin-right: 6px;
+  margin-right: calc(6px * var(--panel-scale));
   vertical-align: middle;
 }
 
@@ -768,8 +772,8 @@ html[data-belt-all] .section.is-flat .step-button {
 }
 
 html[data-belt-all] .section.is-flat .swatch-chip {
-  width: 11px;
-  height: 11px;
+  width: calc(11px * var(--panel-scale));
+  height: calc(11px * var(--panel-scale));
   border-radius: 1px;
   transform: rotate(45deg);
 }
@@ -807,7 +811,7 @@ html[data-belt-all] #sections .all-hide {
 
 html[data-belt-all] #sections .all-line-head {
   flex: 0 0 40%;
-  margin: 0 0 2px;
+  margin: 0 0 calc(2px * var(--panel-scale));
   padding: 0;
   border-top: none;
   font-weight: inherit;
@@ -825,36 +829,36 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
 
 .swatch-chip {
   display: inline-block;
-  width: 14px;
-  height: 14px;
-  border-radius: 3px;
+  width: calc(14px * var(--panel-scale));
+  height: calc(14px * var(--panel-scale));
+  border-radius: calc(3px * var(--panel-scale));
   border: 1px solid var(--panel-border);
 }
 
 .swatch-grid {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(20px, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(auto-fill, minmax(calc(20px * var(--panel-scale)), 1fr));
+  gap: calc(4px * var(--panel-scale));
 }
 
 .swatch {
-  height: 20px;
+  height: calc(20px * var(--panel-scale));
   padding: 0;
   border: 1px solid var(--panel-border);
-  border-radius: 3px;
+  border-radius: calc(3px * var(--panel-scale));
   cursor: pointer;
 }
 
 .swatch.selected {
-  outline: 2px solid var(--accent);
+  outline: calc(2px * var(--panel-scale)) solid var(--accent);
   outline-offset: 1px;
 }
 
 /* A colour chip that opens the free picker. */
 .picker-chip {
   padding: 0;
-  margin-left: 6px;
+  margin-left: calc(6px * var(--panel-scale));
   vertical-align: middle;
   cursor: pointer;
 }
@@ -866,8 +870,8 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
 .picker {
   grid-column: 1 / -1;
   display: grid;
-  gap: 6px;
-  margin: 4px 0 var(--gap);
+  gap: calc(6px * var(--panel-scale));
+  margin: calc(4px * var(--panel-scale)) 0 var(--gap);
 }
 
 .picker[hidden] {
@@ -876,13 +880,13 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
 
 .picker canvas {
   width: 100%;
-  border-radius: 3px;
+  border-radius: calc(3px * var(--panel-scale));
   cursor: crosshair;
   touch-action: none;
 }
 
 .picker-hex {
-  font-size: 11px;
+  font-size: calc(11px * var(--panel-scale));
   opacity: 0.7;
 }
 
@@ -890,15 +894,15 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
    of plugin chips when the entries come from more than one. Inline under the
    row, like the colour picker. */
 .list-chip {
-  margin-left: 6px;
-  padding: 0 6px;
+  margin-left: calc(6px * var(--panel-scale));
+  padding: 0 calc(6px * var(--panel-scale));
   font: inherit;
-  font-size: 10px;
-  line-height: 14px;
+  font-size: calc(10px * var(--panel-scale));
+  line-height: calc(14px * var(--panel-scale));
   color: var(--text-dim);
   background: var(--field-bg);
   border: 1px solid var(--panel-border);
-  border-radius: 3px;
+  border-radius: calc(3px * var(--panel-scale));
   vertical-align: middle;
   cursor: pointer;
 }
@@ -911,8 +915,8 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
 .listpop {
   grid-column: 1 / -1;
   display: grid;
-  gap: 4px;
-  margin: 4px 0 var(--gap);
+  gap: calc(4px * var(--panel-scale));
+  margin: calc(4px * var(--panel-scale)) 0 var(--gap);
 }
 
 .listpop[hidden] {
@@ -922,7 +926,7 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
 .listpop-origins {
   display: flex;
   flex-wrap: wrap;
-  gap: 3px;
+  gap: calc(3px * var(--panel-scale));
   max-height: 4.6em;
   overflow-y: auto;
 }
@@ -932,13 +936,13 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
 }
 
 .listpop-origin {
-  padding: 1px 6px;
+  padding: 1px calc(6px * var(--panel-scale));
   font: inherit;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--panel-scale));
   color: var(--text-dim);
   background: var(--field-bg);
   border: 1px solid var(--panel-border);
-  border-radius: 3px;
+  border-radius: calc(3px * var(--panel-scale));
   cursor: pointer;
 }
 
@@ -948,7 +952,7 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
 }
 
 .listpop-count {
-  font-size: 11px;
+  font-size: calc(11px * var(--panel-scale));
   color: var(--text-dim);
 }
 
@@ -961,11 +965,11 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
   max-height: 14em;
   overflow-y: auto;
   border: 1px solid var(--panel-border);
-  border-radius: 3px;
+  border-radius: calc(3px * var(--panel-scale));
 }
 
 .listpop-item {
-  padding: 2px 6px;
+  padding: calc(2px * var(--panel-scale)) calc(6px * var(--panel-scale));
   font: inherit;
   text-align: left;
   color: var(--text);
@@ -1014,7 +1018,7 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
   grid-column: 1 / -1;
   min-height: 1.2em;
   margin-top: -4px;
-  font-size: 11px;
+  font-size: calc(11px * var(--panel-scale));
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -1037,11 +1041,11 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
 .delegate-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: calc(2px * var(--panel-scale));
 }
 
 .delegate-note {
-  font-size: 12px;
+  font-size: calc(12px * var(--panel-scale));
   color: var(--text-dim);
 }
 
@@ -1053,8 +1057,8 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
   color: var(--text);
   background: var(--field-bg);
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
-  padding: 6px 8px;
+  border-radius: calc(4px * var(--panel-scale));
+  padding: calc(6px * var(--panel-scale)) calc(8px * var(--panel-scale));
 }
 
 .preset-field:focus {
@@ -1064,14 +1068,14 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
 
 .preset-tabs {
   display: flex;
-  gap: 6px;
-  margin: 0 0 8px;
+  gap: calc(6px * var(--panel-scale));
+  margin: 0 0 calc(8px * var(--panel-scale));
 }
 
 .preset-bar {
   display: flex;
-  gap: 6px;
-  margin: 8px 0 6px;
+  gap: calc(6px * var(--panel-scale));
+  margin: calc(8px * var(--panel-scale)) 0 calc(6px * var(--panel-scale));
 }
 
 .preset-bar .preset-save {
@@ -1088,19 +1092,19 @@ html[data-belt-all] #sections .all-line-slider .slider-name {
 }
 
 .preset-status {
-  font-size: 12px;
+  font-size: calc(12px * var(--panel-scale));
   color: var(--text-dim);
-  margin-bottom: 6px;
+  margin-bottom: calc(6px * var(--panel-scale));
 }
 
 .preset-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 260px;
+  max-height: calc(260px * var(--panel-scale));
   overflow-y: auto;
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
+  border-radius: calc(4px * var(--panel-scale));
 }
 
 /* A row: name, date, then its own "i" and Load (D128) - one click loads. */
@@ -1112,8 +1116,8 @@ html[data-belt-region] .section.is-region .preset-list {
 .preset-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px 4px 8px;
+  gap: calc(6px * var(--panel-scale));
+  padding: calc(4px * var(--panel-scale)) calc(6px * var(--panel-scale)) calc(4px * var(--panel-scale)) calc(8px * var(--panel-scale));
   cursor: pointer;
 }
 
@@ -1140,7 +1144,7 @@ html[data-belt-region] .section.is-region .preset-list {
 
 .preset-date {
   flex: none;
-  font-size: 11px;
+  font-size: calc(11px * var(--panel-scale));
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -1152,13 +1156,13 @@ html[data-belt-region] .section.is-region .preset-list {
 
 .preset-row .panel-button {
   flex: none;
-  padding: 2px 8px;
+  padding: calc(2px * var(--panel-scale)) calc(8px * var(--panel-scale));
 }
 
 .preset-more {
   font-weight: 700;
   font-style: italic;
-  min-width: 26px;
+  min-width: calc(26px * var(--panel-scale));
 }
 
 .preset-more.is-on {
@@ -1168,16 +1172,16 @@ html[data-belt-region] .section.is-region .preset-list {
 /* What the preset holds, under its row: the parts as key and value, the
    rest as dim lines, what is missing in the bad colour. */
 .preset-detail {
-  padding: 6px 10px 8px 18px;
+  padding: calc(6px * var(--panel-scale)) calc(10px * var(--panel-scale)) calc(8px * var(--panel-scale)) calc(18px * var(--panel-scale));
   border-bottom: 1px solid var(--panel-border);
   background: var(--row-selected);
-  font-size: 12px;
+  font-size: calc(12px * var(--panel-scale));
   cursor: default;
 }
 
 .preset-detail-line {
   display: flex;
-  gap: 8px;
+  gap: calc(8px * var(--panel-scale));
   padding: 1px 0;
   overflow-wrap: anywhere;
 }
@@ -1192,7 +1196,7 @@ html[data-belt-region] .section.is-region .preset-list {
 
 .preset-detail-key {
   flex: none;
-  width: 44px;
+  width: calc(44px * var(--panel-scale));
   color: var(--text-dim);
 }
 
@@ -1221,7 +1225,7 @@ html[data-belt-region] .section.is-region .preset-list {
 /* The name and the finish button, on the belt (finish.js, D129). */
 .finish-row {
   display: flex;
-  gap: 6px;
+  gap: calc(6px * var(--panel-scale));
 }
 
 .finish-row .preset-field {
@@ -1235,14 +1239,14 @@ html[data-belt-region] .section.is-region .preset-list {
   left: 0;
   bottom: calc(100% + var(--gap) * 1.5);
   margin: 0;
-  padding: 4px 8px;
+  padding: calc(4px * var(--panel-scale)) calc(8px * var(--panel-scale));
   width: max-content;
-  max-width: 460px;
-  font-size: 12px;
+  max-width: calc(460px * var(--panel-scale));
+  font-size: calc(12px * var(--panel-scale));
   color: var(--warn);
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
+  border-radius: calc(4px * var(--panel-scale));
 }
 
 .finish-note.is-bad {
@@ -1264,7 +1268,7 @@ html[data-belt-region] .section.is-region .preset-list {
   left: calc(var(--gap) * 2);
   right: calc(var(--gap) * 2);
   border: 1px solid var(--stage-border);
-  border-radius: 6px;
+  border-radius: calc(6px * var(--panel-scale));
   background: transparent;
   cursor: grab;
   touch-action: none;
@@ -1281,27 +1285,35 @@ html[data-belt-region] .section.is-region .preset-list {
   left: calc(var(--gap) * 3 + var(--control-shift, 0px));
   bottom: calc(var(--belt-height) + var(--name-row) + var(--gap) * 3 + var(--control-lift, 0px));
   display: flex;
+  flex-wrap: wrap;   /* E3: at a large scale the row is wider than the stage; it wraps instead of running off */
+  max-width: calc(100vw - var(--gap) * 6);
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: calc(6px * var(--panel-scale));
+  padding: calc(6px * var(--panel-scale)) calc(10px * var(--panel-scale));
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
+  border-radius: calc(4px * var(--panel-scale));
+}
+
+.control-bar .panel-button,
+.stage-bar .panel-button {
+  white-space: nowrap;
 }
 
 .control-sep {
   width: 1px;
   align-self: stretch;
-  margin: 2px 4px;
+  margin: calc(2px * var(--panel-scale)) calc(4px * var(--panel-scale));
   background: var(--panel-border);
 }
 
 html[data-belt-open] .control-bar {
-  left: calc(var(--panel-width) * var(--panel-scale) + var(--gap) * 3 + var(--control-shift, 0px));
+  left: calc(var(--panel-col) + var(--gap) * 3 + var(--control-shift, 0px));
+  max-width: calc(100vw - var(--panel-col) - var(--gap) * 6);
 }
 
 .control-note {
-  font-size: 11px;
+  font-size: calc(11px * var(--panel-scale));
   color: var(--text-dim);
 }
 
@@ -1311,7 +1323,7 @@ html[data-belt-open] .control-bar {
 
 /* The open small panel takes its width off the stage. */
 html[data-belt-open] .stage {
-  left: calc(var(--panel-width) * var(--panel-scale) + var(--gap) * 2);
+  left: calc(var(--panel-col) + var(--gap) * 2);
 }
 
 .stage.is-dragging {
@@ -1334,7 +1346,7 @@ html[data-belt-open] .stage {
   color: var(--warn);
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
+  border-radius: calc(4px * var(--panel-scale));
 }
 
 .stage-readout {
@@ -1343,11 +1355,11 @@ html[data-belt-open] .stage {
   left: 50%;
   transform: translateX(-50%);
   margin: 0;
-  padding: 4px 10px;
-  font-size: 12px;
+  padding: calc(4px * var(--panel-scale)) calc(10px * var(--panel-scale));
+  font-size: calc(12px * var(--panel-scale));
   color: var(--text-dim);
   background: var(--panel-bg);
-  border-radius: 4px;
+  border-radius: calc(4px * var(--panel-scale));
   white-space: nowrap;
 }
 
@@ -1358,40 +1370,40 @@ html[data-belt-open] .stage {
      and its Reset sit in the same two columns on every row, whatever the
      label's width. Under flex with space-between the fields drifted with it. */
   display: grid;
-  grid-template-columns: 1fr 72px 52px;
+  grid-template-columns: 1fr calc(72px * var(--panel-scale)) calc(52px * var(--panel-scale));
   align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  font-size: 12px;
+  gap: calc(8px * var(--panel-scale));
+  margin-top: calc(6px * var(--panel-scale));
+  font-size: calc(12px * var(--panel-scale));
   color: var(--text);
 }
 
 .stage-tuning-input {
-  width: 72px;
-  padding: 1px 4px;
-  font-size: 12px;
+  width: calc(72px * var(--panel-scale));
+  padding: 1px calc(4px * var(--panel-scale));
+  font-size: calc(12px * var(--panel-scale));
   color: var(--text);
   background: var(--field-bg);
   border: 1px solid var(--panel-border);
-  border-radius: 3px;
+  border-radius: calc(3px * var(--panel-scale));
 }
 
 /* Back to the compiled value: one per row, and one for all seven. */
 .stage-tuning-reset {
   width: 100%;
   padding: 1px 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--panel-scale));
 }
 
 .stage-tuning-reset-all {
-  margin-top: 8px;
+  margin-top: calc(8px * var(--panel-scale));
 }
 
 /* What the DLL did with the number just above it. */
 .stage-tuning-said {
   display: block;
-  margin-top: 2px;
-  font-size: 11px;
+  margin-top: calc(2px * var(--panel-scale));
+  font-size: calc(11px * var(--panel-scale));
   line-height: 1.3;
   color: var(--text-dim);
   white-space: normal;
@@ -1405,29 +1417,29 @@ html[data-belt-open] .stage {
   display: flex;
   align-items: center;
   gap: var(--gap);
-  padding: 6px 10px;
+  padding: calc(6px * var(--panel-scale)) calc(10px * var(--panel-scale));
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
+  border-radius: calc(4px * var(--panel-scale));
   cursor: default;
 }
 
 .stage-group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: calc(4px * var(--panel-scale));
 }
 
 .stage-group-title {
-  font-size: 12px;
+  font-size: calc(12px * var(--panel-scale));
   color: var(--text-dim);
-  margin-right: 2px;
+  margin-right: calc(2px * var(--panel-scale));
 }
 
 .stage-button {
-  min-width: 30px;
-  padding-left: 6px;
-  padding-right: 6px;
+  min-width: calc(30px * var(--panel-scale));
+  padding-left: calc(6px * var(--panel-scale));
+  padding-right: calc(6px * var(--panel-scale));
 }
 
 /* The card for the way back (card.js): the browser stays on screen over RaceMenu's
@@ -1443,17 +1455,17 @@ html.card-mode body > *:not(#back-card) {
   /* A small sign hanging from the top edge, in the free strip between the
      filter box and the tabs of RaceMenu's own film. Two cords hold it. */
   position: fixed;
-  top: 46px;
+  top: calc(46px * var(--panel-scale));
   left: 40vw;
   z-index: 2147483647;
-  padding: 12px 28px 13px;
+  padding: calc(12px * var(--panel-scale)) calc(28px * var(--panel-scale)) calc(13px * var(--panel-scale));
   background: linear-gradient(180deg, rgba(22, 38, 29, 0.98), rgba(9, 16, 12, 0.98));
-  border: 2px solid rgba(160, 230, 185, 0.45);
-  border-radius: 6px;
-  box-shadow: inset 0 0 0 3px rgba(12, 22, 17, 0.92), inset 0 0 0 4px rgba(160, 230, 185, 0.16), 0 6px 14px rgba(0, 0, 0, 0.6);
+  border: calc(2px * var(--panel-scale)) solid rgba(160, 230, 185, 0.45);
+  border-radius: calc(6px * var(--panel-scale));
+  box-shadow: inset 0 0 0 calc(3px * var(--panel-scale)) rgba(12, 22, 17, 0.92), inset 0 0 0 calc(4px * var(--panel-scale)) rgba(160, 230, 185, 0.16), 0 calc(6px * var(--panel-scale)) calc(14px * var(--panel-scale)) rgba(0, 0, 0, 0.6);
   color: var(--text);
   font-family: var(--font);
-  font-size: 25px;
+  font-size: calc(25px * var(--panel-scale));
   line-height: 1.25;
   white-space: nowrap;
   pointer-events: none;
@@ -1467,8 +1479,8 @@ html.card-mode body > *:not(#back-card) {
   content: "";
   position: absolute;
   top: -50px;
-  width: 12px;
-  height: 50px;
+  width: calc(12px * var(--panel-scale));
+  height: calc(50px * var(--panel-scale));
   background:
     radial-gradient(ellipse 5px 7px at 50% 7px, transparent 0 56%, #3f8a5a 60% 78%, #9be0b2 82% 94%, transparent 100%) 0 0 / 12px 24px repeat-y,
     radial-gradient(ellipse 2px 7px at 50% 19px, transparent 0 20%, #2f6e47 30% 70%, #7fcf98 80% 94%, transparent 100%) 0 0 / 12px 24px repeat-y;
@@ -1476,11 +1488,11 @@ html.card-mode body > *:not(#back-card) {
 }
 
 .back-card::before {
-  left: 24px;
+  left: calc(24px * var(--panel-scale));
 }
 
 .back-card::after {
-  right: 24px;
+  right: calc(24px * var(--panel-scale));
 }
 
 .back-card b {
@@ -1495,8 +1507,8 @@ html.card-mode body > *:not(#back-card) {
 /* The controller's focus ring (pad.js). A class, not :focus: the ring never
    takes the browser's focus, so the mouse and the keyboard never see it. */
 .pad-focus {
-  outline: 2px solid var(--accent);
+  outline: calc(2px * var(--panel-scale)) solid var(--accent);
   outline-offset: 1px;
-  border-radius: 4px;
-  box-shadow: 0 0 10px rgba(143, 217, 160, 0.65);
+  border-radius: calc(4px * var(--panel-scale));
+  box-shadow: 0 0 calc(10px * var(--panel-scale)) rgba(143, 217, 160, 0.65);
 }

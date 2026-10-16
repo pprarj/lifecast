@@ -38,7 +38,7 @@ namespace Lifecast::Core::Settings
 		// same NUMBERS today, and a future change to one is a change to both.
 		bool IsPanelScale(const json& a_value)
 		{
-			return a_value.is_number() && a_value.get<double>() >= 0.8 && a_value.get<double>() <= 1.6;
+			return a_value.is_number() && a_value.get<double>() >= 0.8 && a_value.get<double>() <= 2.5;
 		}
 
 		// Every value under the key has to be a bool; the key names themselves

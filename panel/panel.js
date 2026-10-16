@@ -15,10 +15,11 @@
 
   // How big the panel is drawn. The bounds are a guard, not a taste: below
   // kMin the step buttons stop being hittable, and above kMax the panel eats
-  // the character it exists to show. Where inside the range the player lands
+  // the character it exists to show (2.5 is the ceiling the player asked for on
+  // a 4K screen, where a 1.6 panel stayed small). Where inside the range the player lands
   // is theirs, and nothing here picks a default other than "as authored".
   const SCALE_MIN = 0.8;
-  const SCALE_MAX = 1.6;
+  const SCALE_MAX = 2.5;
   const SCALE_STEP = 0.1;
 
   const statusEl = document.getElementById("bridge-status");

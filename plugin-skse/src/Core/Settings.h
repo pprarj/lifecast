@@ -46,7 +46,7 @@
 // THE KEYS (1.0):
 //
 //   presetsSort   "name" | "time"      how the preset list is ordered; "name"
-//   panelScale    number, 0.8 to 1.6   the panel's size (--panel-scale);
+//   panelScale    number, 0.8 to 2.5   the panel's size (--panel-scale);
 //                                      panel.js's own SCALE_MIN/SCALE_MAX
 //   sectionsOpen  object, key -> bool  which sections the player left open;
 //                                      an object because the set of keys
