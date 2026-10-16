@@ -369,8 +369,9 @@ const LifecastPad = (() => {
     }
     const row = cur.closest(".slider");
     cur.click();
-    // Choosing an entry closes its list with the ring still on it: back to
-    // the row, as the close does.
+    // A list now stays open after a choice, so the ring stays on the entry;
+    // if the click did hide it (a picker, a button that closes), back to the
+    // row, as the close does.
     if (row && !valid()) {
       setCur(row);
     }

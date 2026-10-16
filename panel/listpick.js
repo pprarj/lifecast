@@ -8,7 +8,9 @@
 // beside the row's name opens a pop-up under the row with every entry, and
 // choosing one is exactly what pressing the step buttons does - the row sets
 // the value, sends it as final and writes it to the undo history. The row stays
-// as it was; the pop-up is one more way in, not a replacement.
+// as it was; the pop-up is one more way in, not a replacement. The pop-up stays
+// open after a choice, so entries can be tried one after another; the chip
+// closes it.
 //
 // It opens inline under the row like the colour picker does (nothing floats
 // over the stage). When the entries come from more than one plugin it offers
@@ -203,13 +205,12 @@ const LifecastList = (() => {
       applyFilter();
     });
 
+    // Choosing applies the entry and leaves the pop-up as it was - open, with
+    // the same plugin chip, text and scroll - so a long list can be walked
+    // entry by entry. The chip beside the name closes it.
     function pick(value) {
       row.choose(value);
-      state.current = value;
-      markSelected();
-      clearFind();
-      applyFilter();
-      wrap.hidden = true;
+      setCurrent(value);
     }
 
     function addButton(value, label, title) {
