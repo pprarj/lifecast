@@ -175,6 +175,7 @@
         max: 100,
         step: 1,
         button: 5,
+        typed: true,
         format: (v) => String(Math.round(v)) + "%",
         send: (v, final) => send(l.k, { alpha: v / 100 }, final),
       });

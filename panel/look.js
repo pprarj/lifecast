@@ -76,6 +76,7 @@
       max: key === "weight" ? 100 : 0,
       step: 1,
       button: 1,
+      typed: key === "weight",
       format: (v) => (entry.kind === "list" ? String(v) + " / " + String(entry.count - 1) : String(Math.round(v))),
       send: (v, final, id) => send(key, v, final, id),
       identity: isPart ? () => entry.ident : undefined,

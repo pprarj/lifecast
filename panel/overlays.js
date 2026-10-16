@@ -104,6 +104,7 @@
       max: 100,
       step: 1,
       button: 5,
+      typed: true,
       format: (v) => String(Math.round(v)) + "%",
       send: (v, final) => send(areaKey, index, { alpha: v / 100 }, final),
     });
@@ -113,6 +114,7 @@
       max: 100,
       step: 1,
       button: 5,
+      typed: true,
       format: (v) => String(Math.round(v)) + "%",
       send: (v, final) => send(areaKey, index, { glowAlpha: v / 100 }, final),
     });

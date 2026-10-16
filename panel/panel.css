@@ -635,6 +635,24 @@ html:not([data-belt-open]) .finder {
   color: var(--text-dim);
 }
 
+.slider-value.is-typed,
+.picker-hex.is-typed {
+  cursor: text;
+}
+
+.slider-edit,
+.picker-hex-edit {
+  width: 5.5em;
+  box-sizing: border-box;
+  padding: 0 4px;
+  font: inherit;
+  text-align: right;
+  color: var(--text);
+  background: var(--field-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+}
+
 .slider-name {
   display: flex;
   align-items: center;

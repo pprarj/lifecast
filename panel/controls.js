@@ -350,6 +350,9 @@ const LifecastControls = (() => {
   // Optional: portrait:false keeps the row out of the portrait; entry(before,
   // after, put) builds the history entry in place of the default one (or
   // returns null for none) - for a row whose step is not a value to put back.
+  // typed:true lets the player click the number and type the value. Only for
+  // a row whose shown number IS the value in the same unit - never a list or
+  // index row, nor one whose value text is replaced by something else.
   function row(a_opts) {
     const wrap = el("div", "slider");
     const name = el("span", "slider-name", a_opts.label);
@@ -378,7 +381,8 @@ const LifecastControls = (() => {
     wrap.appendChild(value);
     wrap.appendChild(track);
 
-    const state = { dragging: false, timer: null, lastSent: 0, hasInitial: false, initial: null, last: null, fake: false };
+    const state = { dragging: false, timer: null, lastSent: 0, hasInitial: false, initial: null, last: null, fake: false,
+      editing: null };
     wrap.dataset.changed = "0";
 
     function show(v) {
@@ -465,6 +469,81 @@ const LifecastControls = (() => {
       commit(Number(input.value));
     }
 
+    // The typed number, or null when the text is not one. A sign, a dot or a
+    // comma decimal and a trailing % are accepted.
+    function parseTyped(a_text) {
+      const t = String(a_text).trim().replace(/%$/, "").trim().replace(",", ".");
+      if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(t)) {
+        return null;
+      }
+      const n = Number(t);
+      return isFinite(n) ? n : null;
+    }
+
+    // Closes the editor. a_text is what to apply, or null to cancel. An
+    // applied number goes the stepBy way: held to the range, rounded to the
+    // step, sent once as final, offered to the history.
+    function endEdit(a_text) {
+      const field = state.editing;
+      if (!field) {
+        return;
+      }
+      state.editing = null;
+      field.remove();
+      const n = a_text === null ? null : parseTyped(a_text);
+      if (n === null || input.disabled) {
+        show(Number(input.value));
+        return;
+      }
+      const min = Number(input.min);
+      const max = Number(input.max);
+      const step = Number(input.step);
+      let v = Math.round(n / step) * step;
+      v = Math.min(max, Math.max(min, v));
+      // The step multiplication leaves float dust (0.30000000000000004).
+      v = Number(v.toFixed(Math.min(8, (String(step).split(".")[1] || "").length)));
+      v = Math.min(max, Math.max(min, v));
+      input.value = String(v);
+      show(Number(input.value));
+      send(true);
+      commit(Number(input.value));
+    }
+
+    function beginEdit() {
+      if (input.disabled || state.editing) {
+        return;
+      }
+      const field = el("input", "slider-edit");
+      field.type = "text";
+      field.value = String(Number(input.value));
+      field.setAttribute("aria-label", a_opts.label);
+      state.editing = field;
+      value.textContent = "";
+      value.appendChild(field);
+      field.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          endEdit(field.value);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          endEdit(null);
+        }
+      });
+      field.addEventListener("blur", () => {
+        if (state.editing === field) {
+          endEdit(field.value);
+        }
+      });
+      field.focus();
+      field.select();
+    }
+
+    if (a_opts.typed) {
+      value.classList.add("is-typed");
+      value.addEventListener("click", beginEdit);
+    }
+
     down.addEventListener("click", () => stepBy(-1));
     up.addEventListener("click", () => stepBy(1));
 
@@ -472,7 +551,7 @@ const LifecastControls = (() => {
       el: wrap,
       input: input,
       // The player's hand wins over a value from before it moved.
-      dragging: () => state.dragging,
+      dragging: () => state.dragging || state.editing !== null,
       // null disables the row and shows "--".
       //
       // The FIRST number a row ever receives is its baseline (V079: nothing
@@ -486,12 +565,20 @@ const LifecastControls = (() => {
         up.disabled = off;
         state.fake = false;
         if (off) {
+          if (state.editing) {
+            const field = state.editing;
+            state.editing = null;
+            field.remove();
+          }
           value.textContent = "--";
           state.last = null;
           return;
         }
         input.value = String(a_v);
-        show(a_v);
+        // An echo from the DLL does not wipe what is being typed.
+        if (!state.editing) {
+          show(a_v);
+        }
         state.last = a_v;
         if (!state.hasInitial) {
           state.hasInitial = true;

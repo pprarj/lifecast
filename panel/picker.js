@@ -4,8 +4,7 @@
 // Any control that offers a colour gets one, next to its swatches: the
 // swatches are the race's presets, the picker is everything else. It opens
 // under the control when its colour chip is clicked, and closes on a second
-// click. There is no text field on purpose - typed text is the one input
-// the in-game browser still mangles.
+// click. The hex under the bar is typeable: click it, type RRGGBB, Enter.
 //
 // While the square or the bar is dragged the picker reports at most one
 // colour per SEND_GAP_MS, always the latest; when the drag ends it reports
@@ -65,7 +64,7 @@ const LifecastPicker = (() => {
     wrap.appendChild(hexLabel);
 
     const hsv = { h: 0, s: 0, v: 0 };
-    const state = { dragging: false, timer: null, lastSent: 0, last: null };
+    const state = { dragging: false, timer: null, lastSent: 0, last: null, editing: null };
 
     function current() {
       return hsvToHex(hsv.h, hsv.s, hsv.v);
@@ -139,8 +138,69 @@ const LifecastPicker = (() => {
       hb.fillStyle = "#FFF";
       hb.fillRect(Math.max(0, hx - 1.5), 0, 3, hue.height);
 
-      hexLabel.textContent = current();
+      if (!state.editing) {
+        hexLabel.textContent = current();
+      }
     }
+
+    // The typed hex: RRGGBB with or without #, any case. Anything else sends
+    // nothing and the hex that was there comes back. An applied colour takes
+    // the same road the undo's apply takes.
+    function endHexEdit(a_text) {
+      const field = state.editing;
+      if (!field) {
+        return;
+      }
+      state.editing = null;
+      field.remove();
+      const m = a_text === null ? null : /^#?([0-9a-f]{6})$/i.exec(String(a_text).trim());
+      if (m) {
+        const next = hexToHsv("#" + m[1]);
+        if (next.s > 0 && next.v > 0) {
+          hsv.h = next.h;
+        }
+        hsv.s = next.s;
+        hsv.v = next.v;
+        draw();
+        report(true);
+      } else {
+        draw();
+      }
+    }
+
+    function beginHexEdit() {
+      if (state.editing || state.dragging) {
+        return;
+      }
+      const field = LifecastControls.el("input", "picker-hex-edit");
+      field.type = "text";
+      field.value = current().slice(1);
+      field.maxLength = 7;
+      field.setAttribute("aria-label", "Hex colour");
+      state.editing = field;
+      hexLabel.textContent = "";
+      hexLabel.appendChild(field);
+      field.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          endHexEdit(field.value);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          endHexEdit(null);
+        }
+      });
+      field.addEventListener("blur", () => {
+        if (state.editing === field) {
+          endHexEdit(field.value);
+        }
+      });
+      field.focus();
+      field.select();
+    }
+
+    hexLabel.classList.add("is-typed");
+    hexLabel.addEventListener("click", beginHexEdit);
 
     function report(final) {
       if (state.timer !== null) {

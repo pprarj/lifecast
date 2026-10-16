@@ -128,6 +128,7 @@
       max: s.max,
       step: step,
       button: steps > 10 ? step * 5 : step,
+      typed: true,
       format: (v) => (signed && v >= 0 ? "+" : "") + v.toFixed(dp),
       send: (v, final) => LifecastBridge.send("slider-set", { k: s.k, v: v, final: final }),
     });
