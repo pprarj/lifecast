@@ -215,6 +215,155 @@ namespace Lifecast::Panel::Switcher
 			spdlog::info("[switch] the console was open - asked it to close");
 		}
 
+		// ----- showracemenu typed into the console --------------------------
+		//
+		// Opened while the console is still open, the editor's second figure is
+		// born with no render passes and never draws (D267); opened once the
+		// console has left the menu stack, it draws (D268). So the command's
+		// executor is ours. With the console open it asks the console to close
+		// and returns - nothing opens inside the command - and the input tick
+		// opens the editor a moment after the console is gone, by running the
+		// game's own showracemenu again, which this executor passes straight
+		// through. Every other call - the console closed, the editor already
+		// open, that re-run - goes to the game's executor untouched.
+		//
+		// The engine has no API to register or replace a command: the executor
+		// pointer of the command's table entry is rewritten in place, the way
+		// SKSE plugins take table entries over.
+
+		constexpr auto kOpenDelay = std::chrono::milliseconds(100);
+
+		// Past this without the console leaving for good, the open is dropped
+		// rather than the editor popping up long after the command was typed.
+		constexpr auto kOpenGiveUp = std::chrono::seconds(30);
+
+		RE::SCRIPT_FUNCTION::Execute_t* g_showRaceMenuFn = nullptr;
+
+		struct PendingOpen
+		{
+			bool              on{ false };
+			bool              gone{ false };  // the console was read off the stack
+			Clock::time_point askedAt{};
+			Clock::time_point goneAt{};
+			std::uint32_t     reopened{ 0 };
+		};
+		PendingOpen g_pending;
+
+		// The game's command is running from OpenEditor().
+		bool g_rerun = false;
+
+		bool IsOpen(std::string_view a_menu)
+		{
+			auto* ui = RE::UI::GetSingleton();
+			return ui && ui->IsMenuOpen(a_menu);
+		}
+
+		long long MsSince(Clock::time_point a_then)
+		{
+			return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - a_then).count();
+		}
+
+		// The game's showracemenu, run again with the console closed: whatever
+		// the command does besides showing the menu, it still does.
+		void OpenEditor()
+		{
+			auto* factory = RE::IFormFactory::GetConcreteFormFactoryByType<RE::Script>();
+			auto* script = factory ? factory->Create() : nullptr;
+			if (!script) {
+				auto* queue = RE::UIMessageQueue::GetSingleton();
+				if (!queue) {
+					spdlog::error("[switch] showracemenu: no script to run the command and no UI message queue - the editor does not open");
+					return;
+				}
+				queue->AddMessage(RE::RaceSexMenu::MENU_NAME, RE::UI_MESSAGE_TYPE::kShow, nullptr);
+				spdlog::warn("[switch] showracemenu: no script to run the command - the editor is shown through the UI message queue");
+				return;
+			}
+			script->SetCommand("showracemenu");
+			g_rerun = true;
+			script->CompileAndRun(RE::PlayerCharacter::GetSingleton());
+			g_rerun = false;
+			delete script;
+		}
+
+		// Runs on every input tick; one bool read when nothing is pending.
+		void TickPendingOpen()
+		{
+			if (!g_pending.on) {
+				return;
+			}
+			if (Clock::now() - g_pending.askedAt > kOpenGiveUp) {
+				g_pending.on = false;
+				spdlog::warn("[switch] showracemenu: the console did not stay closed within {} s - the editor is not opened",
+					kOpenGiveUp.count());
+				return;
+			}
+			if (IsOpen(RE::Console::MENU_NAME)) {
+				if (g_pending.gone) {
+					g_pending.gone = false;
+					++g_pending.reopened;
+					spdlog::info("[switch] showracemenu: the console is open again - the editor waits for it to close (#{})",
+						g_pending.reopened);
+				}
+				return;
+			}
+			if (!g_pending.gone) {
+				g_pending.gone = true;
+				g_pending.goneAt = Clock::now();
+				spdlog::info("[switch] showracemenu: the console left the menu stack {} ms after the command",
+					MsSince(g_pending.askedAt));
+			}
+			if (Clock::now() - g_pending.goneAt < kOpenDelay) {
+				return;
+			}
+			g_pending.on = false;
+			if (IsOpen(RE::RaceSexMenu::MENU_NAME)) {
+				spdlog::info("[switch] showracemenu: the editor is already open - nothing to open");
+				return;
+			}
+			spdlog::info("[switch] showracemenu: opening the editor {} ms after the console left", MsSince(g_pending.goneAt));
+			OpenEditor();
+		}
+
+		bool ShowRaceMenuCommand(const RE::SCRIPT_PARAMETER* a_paramInfo, RE::SCRIPT_FUNCTION::ScriptData* a_scriptData,
+			RE::TESObjectREFR* a_thisObj, RE::TESObjectREFR* a_containingObj, RE::Script* a_scriptObj,
+			RE::ScriptLocals* a_locals, double& a_result, std::uint32_t& a_opcodeOffsetPtr)
+		{
+			auto* queue = RE::UIMessageQueue::GetSingleton();
+			if (g_rerun || !queue || !IsOpen(RE::Console::MENU_NAME) || IsOpen(RE::RaceSexMenu::MENU_NAME)) {
+				return g_showRaceMenuFn(a_paramInfo, a_scriptData, a_thisObj, a_containingObj, a_scriptObj, a_locals, a_result,
+					a_opcodeOffsetPtr);
+			}
+			queue->AddMessage(RE::Console::MENU_NAME, RE::UI_MESSAGE_TYPE::kHide, nullptr);
+			g_pending = {};
+			g_pending.on = true;
+			g_pending.askedAt = Clock::now();
+			spdlog::info("[switch] showracemenu typed into the open console - it closes the console first; the editor opens {} ms "
+						 "after the console has left",
+				kOpenDelay.count());
+			return true;
+		}
+
+		void TakeOverShowRaceMenu()
+		{
+			if (g_showRaceMenuFn) {
+				return;
+			}
+			auto* command = RE::SCRIPT_FUNCTION::LocateConsoleCommand("ShowRaceMenu");
+			if (!command) {
+				command = RE::SCRIPT_FUNCTION::LocateScriptCommand("ShowRaceMenu");
+			}
+			if (!command || !command->executeFunction) {
+				spdlog::warn("[switch] the showracemenu command was not found - typed into the console it opens the editor "
+							 "over the console, and Compare is not offered there");
+				return;
+			}
+			g_showRaceMenuFn = command->executeFunction;
+			RE::SCRIPT_FUNCTION::Execute_t* ours = &ShowRaceMenuCommand;
+			REL::safe_write(reinterpret_cast<std::uintptr_t>(&command->executeFunction), &ours, sizeof(ours));
+			spdlog::info("[switch] showracemenu taken over: typed into the console, it closes the console before the editor opens");
+		}
+
 		void SetMode(Mode a_mode)
 		{
 			spdlog::info("[switch] {} -> {}", ModeName(g_mode), ModeName(a_mode));
@@ -426,6 +575,7 @@ namespace Lifecast::Panel::Switcher
 				RE::BSTEventSource<RE::InputEvent*>*) override
 			{
 				Watch();
+				TickPendingOpen();
 
 				// This is the input tick that drives the stage, not a frame
 				// tick: it fires on input dispatch, measured between 56.7
@@ -492,6 +642,8 @@ namespace Lifecast::Panel::Switcher
 		Bridge::On("racemenu-categories-get", &OnPageCategories);
 		Bridge::On("portraits-get", &OnPagePortraitsGet);
 		Bridge::On("show-portraits", [](const nlohmann::json&) { ShowPortraits(); });
+
+		TakeOverShowRaceMenu();
 
 		g_installed = true;
 		spdlog::info("[switch] installed - F4 swaps the Lifecast and RaceMenu");

@@ -2132,19 +2132,17 @@ namespace Lifecast::Edit::Compare
 
 		// ----- the session --------------------------------------------------------
 
-		// Where the twin is BORN. A figure born with the menu OPEN drew (confirmed
-		// in a captured frame) in cell 00016A06 - the very cell where boots 78
-		// and 79 had measured that one born inside the menu does not. Those two
-		// boots measured a probe that no longer exists, with
-		// code from four days before this module was written, so that
-		// measurement does not transfer here. What decides whether she draws is
-		// therefore OPEN: it is not the cell and it is not being born with the
-		// menu open, and the path of the birth is the part nobody has isolated.
+		// Where the twin is BORN: in OnOpened, with the menu already open - this
+		// tick never gives birth. Born there she draws when the console is NOT
+		// open at that moment; born with the console open she gets no render
+		// passes and is never drawn (D267), and reused from an earlier opening
+		// she is not drawn either. The switcher closes the console before the
+		// editor opens when showracemenu is typed into it (D268), so that birth
+		// is the console-closed one; g_available stays as the net for any other
+		// way in.
 		//
-		// So the birth is armed when the editor CLOSES, and it happens on the
-		// next input tick, in the room the player is standing in, which is the
-		// room the next opening will be in. The cost of the tick when it is not
-		// armed is two bool reads.
+		// What this tick does is bring her body in, watch it, and retire her
+		// after a vanish. When none of that is pending it costs a few bool reads.
 		void OnTick()
 		{
 			if (g_cull) {
@@ -2194,9 +2192,11 @@ namespace Lifecast::Edit::Compare
 			g_turn = 0.0f;
 			Panel::Stage::ClearPairShift();
 			g_why.clear();
-			// Read first, before anything this opening does: the console is still
-			// open here when the editor was opened from it (the switcher only
-			// queues its close).
+			// Read first, before anything this opening does: the console can still
+			// be open here when the editor was opened from it by any way other
+			// than the showracemenu command (the switcher closes the console
+			// before that one opens the editor, and only queues its close
+			// otherwise).
 			auto*      ui = RE::UI::GetSingleton();
 			const bool consoleOpen = ui && ui->IsMenuOpen(RE::Console::MENU_NAME);
 			bool       bornNow = false;
