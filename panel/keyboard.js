@@ -12,11 +12,14 @@
 //
 // Prisma UI:
 //   3. A dead key does not compose either, and differently: the accent key
-//      arrives as a keydown that inserts NOTHING (the acute on ABNT2 measured
-//      as keydown "[" keyCode 219, no input, no composition), and the vowel
-//      after it arrives plain. Here the accent is read from the keydown and
-//      put on the next character. No doubled press was seen on Prisma, so 2
-//      does not run there.
+//      arrives as a keydown that usually inserts NOTHING (the acute on ABNT2
+//      measured as keydown "[" keyCode 219, no input, no composition), and the
+//      vowel after it arrives plain. Sometimes, press by press, Prisma instead
+//      inserts the bare accent twice right after that keydown, and the vowel
+//      still arrives plain. Here the accent is read from the keydown, any bare
+//      accent Prisma inserts for it is taken back out, and the accent is put
+//      on the next character. No doubled press was seen on Prisma, so 2 does
+//      not run there.
 //
 // Everything happens in the page and applies to every text field in it.
 // Which backend is running comes from the bridge (LifecastBridge.backend());
@@ -195,6 +198,25 @@
   // first, the candidate was a dead key and its accent waits for the next
   // character.
   //
+  // The echo (D277). Measured with every page event logged: on some presses,
+  // with nothing different in the keydown itself, Prisma follows the dead
+  // key's keydown with TWO trusted insertions of the bare accent, one
+  // character each (U+00B4 twice, "^" twice), and the next vowel still
+  // arrives plain. It is press by press, not key by key: the same key echoed
+  // in one field and not in the next. Two bare accents is what Windows itself
+  // gives for a dead key pressed while one is already pending, so the echo
+  // looks like the dead key being translated twice - that part is inferred,
+  // not measured. Taken as an ordinary key, the first echo used to drop the
+  // accent, which is how the acute and the grave came out doubled and
+  // uncomposed. Now an insertion of exactly the bare accent of the dead key
+  // just pressed, before the next keydown, is removed and the key stays dead.
+  //
+  // Space reaches the page as keydown "Unidentified" (measured): that is not a
+  // named key like Backspace, so it does not abandon the accent, and accent
+  // then space gives the accent alone. Two dead keys in a row write both
+  // accents and leave nothing waiting - the same two accents the echo shows
+  // Windows producing.
+  //
   // Which accent: ABNT2, by keyCode and Shift. Only the acute was measured on
   // Prisma; the rest of the table is the ABNT2 layout itself. Another layout's
   // dead keys are not in it and stay as Prisma delivers them.
@@ -220,6 +242,7 @@
 
   let candidate = null; // accent of a keydown that has not inserted anything yet
   let armed = null;     // accent of a dead key, waiting for the next character
+  let echo = null;      // bare accent Prisma may insert for the dead key just pressed
 
   document.addEventListener("keydown", (event) => {
     if (backend() !== "prisma") {
@@ -230,24 +253,27 @@
       armed = candidate;
       candidate = null;
     }
+    // The echo only ever follows its own keydown.
+    echo = null;
     if (NEUTRAL_KEYS.has(event.key)) {
       return;
     }
     const accent = prismaAccent(event);
     if (accent) {
       if (armed) {
-        // Two dead keys in a row: Windows writes the first accent and keeps
-        // the second waiting. Written here the same way.
+        // Two dead keys in a row: both accents, nothing left waiting.
         const el = document.activeElement;
         if (isTextField(el)) {
-          insertAt(el, armed.char);
+          insertAt(el, armed.char + accent.char);
         }
         armed = null;
+      } else {
+        candidate = accent;
       }
-      candidate = accent;
+      echo = accent.char;
       return;
     }
-    if (event.key.length > 1) {
+    if (event.key.length > 1 && event.key !== "Unidentified") {
       // Backspace, arrows, Enter and the like: the accent is abandoned.
       armed = null;
     }
@@ -265,7 +291,9 @@
     el.setRangeText(text, s, e, "end");
     selfInput = true;
     try {
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      el.dispatchEvent(new InputEvent("input", text === ""
+        ? { bubbles: true, inputType: "deleteContentBackward", data: null }
+        : { bubbles: true, inputType: "insertText", data: text }));
     } finally {
       selfInput = false;
     }
@@ -273,26 +301,44 @@
   }
 
   // Read on "input", after the character is in the field, and not on
-  // "beforeinput": "input" is what was seen on Prisma; whether it fires
-  // "beforeinput" was not measured. The character just typed is replaced.
+  // "beforeinput": "input" is what was seen on Prisma, along with
+  // "beforeinput". The character just typed is replaced.
   document.addEventListener("input", (event) => {
     if (backend() !== "prisma" || selfInput) {
       return;
     }
+    const el = event.target;
+    const data = event.data;
+    if (!isTextField(el)) {
+      return;
+    }
+    const pos = el.selectionStart;
+    const caretAfter = (ch) => pos !== null && pos === el.selectionEnd && pos >= 1 && el.value.charAt(pos - 1) === ch;
+
+    if (echo !== null && data === echo && caretAfter(data)) {
+      // Prisma's echo of the dead key: out again, and the key stays dead.
+      insertAt(el, "", pos - 1, pos);
+      return;
+    }
+    if (event.inputType !== "insertText") {
+      // A deletion, a paste and the like: whatever was waiting is abandoned.
+      candidate = null;
+      armed = null;
+      return;
+    }
     if (candidate) {
-      // The candidate key inserted something: an ordinary key. Let it be.
+      // The candidate key inserted something else: an ordinary key. Let it be.
       candidate = null;
       return;
     }
-    const el = event.target;
-    const data = event.data;
-    if (!armed || !isTextField(el) || typeof data !== "string" || data.length !== 1) {
+    if (!armed) {
       return;
     }
     const pending = armed;
     armed = null;
-    const pos = el.selectionStart;
-    if (pos === null || pos !== el.selectionEnd || pos < 1 || el.value.charAt(pos - 1) !== data) {
+    if (typeof data !== "string" || data.length !== 1 || data.normalize("NFD").length !== 1 || !caretAfter(data)) {
+      // More than one character, or a letter that already carries its accent
+      // (Prisma composed it): left as it came.
       return;
     }
     let text;
