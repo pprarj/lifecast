@@ -48,9 +48,9 @@ namespace Lifecast::Panel::Bridge
 			return fmt::format("{}... [{} chars total]", a_text.substr(0, kLogCap), a_text.size());
 		}
 
-		// Meridian's guide says to wait for IsPageLoaded() before
-		// ExecEventFunction: a message sent while the main frame is still
-		// loading may never reach the page's listener. Such messages are
+		// A message sent while the page is still loading may never reach its
+		// listener (Meridian's guide says so for ExecEventFunction; on Prisma
+		// the receiving function does not exist before DOM ready). Such messages are
 		// held here, in order, and delivered on the game thread once the
 		// page has loaded. Once one is held, every later one is held behind
 		// it, so the page never sees them out of order.
@@ -80,8 +80,8 @@ namespace Lifecast::Panel::Bridge
 				g_watching = false;
 				return;
 			}
-			auto* browser = Panel::Browser();
-			const bool loaded = browser && browser->IsPageLoaded();
+			const bool exists = Panel::Exists();
+			const bool loaded = exists && Panel::PageReady();
 			if (!loaded && !a_giveUp) {
 				return;
 			}
@@ -94,7 +94,7 @@ namespace Lifecast::Panel::Bridge
 			}
 			if (!loaded) {
 				spdlog::warn("[bridge] dll->page DROPPED {} held message{} after {} ms: {} ({})", g_held.size(),
-					g_held.size() == 1 ? "" : "s", ms, browser ? "the page never loaded" : "no browser", types);
+					g_held.size() == 1 ? "" : "s", ms, exists ? "the page never loaded" : "no page", types);
 				g_held.clear();
 				return;
 			}
@@ -103,12 +103,12 @@ namespace Lifecast::Panel::Bridge
 			auto held = std::move(g_held);
 			g_held.clear();
 			for (const auto& h : held) {
-				browser->ExecEventFunction(kEventName, h.text.c_str());
+				Panel::Post(h.text);
 			}
 		}
 
 		// Off the game thread: only waits, and asks the game thread to look.
-		// No browser call is made here.
+		// No backend call is made here.
 		void Watch()
 		{
 			const auto watch = ++g_watch;
@@ -139,8 +139,8 @@ namespace Lifecast::Panel::Bridge
 		// send(msg) therefore delivers a JSON string whose content is the
 		// real message. Both are accepted, and the log says which one
 		// arrived - the difference is exactly what a bridge defect would
-		// look like.
-		json Decode(const char* a_arg, bool& a_wasStringWrapped)
+		// look like. Prisma delivers the argument raw: one decode, never two.
+		json Decode(const char* a_arg, bool a_mayBeWrapped, bool& a_wasStringWrapped)
 		{
 			a_wasStringWrapped = false;
 
@@ -149,7 +149,7 @@ namespace Lifecast::Panel::Bridge
 				return outer;
 			}
 
-			if (outer.is_string()) {
+			if (a_mayBeWrapped && outer.is_string()) {
 				a_wasStringWrapped = true;
 				return json::parse(outer.get<std::string>(), nullptr, false);
 			}
@@ -194,63 +194,6 @@ namespace Lifecast::Panel::Bridge
 
 			it->second(data);
 		}
-
-		// The send binding. Registered with executeInGameThread = true, so
-		// this runs on the game thread and the pointers in a_args are valid
-		// for the duration of the call.
-		void OnPageSend(const char** a_args, int a_argsCount)
-		{
-			if (a_argsCount < 1 || !a_args || !a_args[0]) {
-				spdlog::warn("[bridge] page->dll: send() called with {} arguments - expected 1", a_argsCount);
-				return;
-			}
-
-			spdlog::info("[bridge] page->dll raw ({} arg{}): {}",
-				a_argsCount, a_argsCount == 1 ? "" : "s", Clip(a_args[0]));
-
-			if (a_argsCount > 1) {
-				spdlog::warn("[bridge] page->dll: {} extra arguments ignored", a_argsCount - 1);
-			}
-
-			bool wasStringWrapped = false;
-			const auto message = Decode(a_args[0], wasStringWrapped);
-
-			if (message.is_discarded()) {
-				spdlog::warn("[bridge] page->dll: argument is not valid JSON - ignored");
-				return;
-			}
-
-			if (wasStringWrapped) {
-				spdlog::info("[bridge] page->dll: the message arrived as a JSON STRING and was decoded twice");
-			}
-
-			Dispatch(message);
-		}
-
-		Meridian::JS::JSFuncInfo& SendBinding()
-		{
-			static Meridian::JS::JSFuncInfo s_info = [] {
-				Meridian::JS::JSFuncInfo info{};
-				info.objectName = kObjectName;
-				info.funcName = kSendFunction;
-				info.callbackData.callback = &OnPageSend;
-				info.callbackData.executeInGameThread = true;
-				return info;
-			}();
-			return s_info;
-		}
-
-		Meridian::JS::JSFuncInfo& EventBinding()
-		{
-			static Meridian::JS::JSFuncInfo s_info = [] {
-				Meridian::JS::JSFuncInfo info{};
-				info.objectName = kObjectName;
-				info.funcName = kEventFunction;
-				info.callbackData.isEventFunction = true;
-				return info;
-			}();
-			return s_info;
-		}
 	}
 
 	void On(std::string_view a_type, Handler a_handler)
@@ -271,14 +214,13 @@ namespace Lifecast::Panel::Bridge
 		// of this fix that survives: a bigger cap stops the current messages
 		// from losing their "type", but any payload that outgrows the cap
 		// later would lose it again. Naming it here cannot be outgrown.
-		auto* browser = Panel::Browser();
-		if (!browser) {
-			spdlog::warn("[bridge] dll->page \"{}\" DROPPED, no browser: {}", a_type,
+		if (!Panel::Exists()) {
+			spdlog::warn("[bridge] dll->page \"{}\" DROPPED, no page: {}", a_type,
 				a_logWhole ? text : Clip(text));
 			return;
 		}
 
-		if (!g_held.empty() || !browser->IsPageLoaded()) {
+		if (!g_held.empty() || !Panel::PageReady()) {
 			spdlog::info("[bridge] dll->page \"{}\" HELD until the page loads: {}", a_type,
 				a_logWhole ? text : Clip(text));
 			g_held.push_back({ std::string(a_type), text, Clock::now() });
@@ -289,17 +231,35 @@ namespace Lifecast::Panel::Bridge
 		}
 
 		spdlog::info("[bridge] dll->page \"{}\": {}", a_type, a_logWhole ? text : Clip(text));
-		browser->ExecEventFunction(kEventName, text.c_str());
+		Panel::Post(text);
 	}
 
-	Meridian::JS::JSFuncInfo* const* Bindings()
+	void Receive(const char* a_arg, int a_argCount, bool a_mayBeWrapped)
 	{
-		static Meridian::JS::JSFuncInfo* const s_bindings[] = { &SendBinding(), &EventBinding() };
-		return s_bindings;
-	}
+		if (!a_arg) {
+			spdlog::warn("[bridge] page->dll: send() called with no argument - expected 1");
+			return;
+		}
 
-	std::uint32_t BindingCount()
-	{
-		return 2;
+		spdlog::info("[bridge] page->dll raw ({} arg{}): {}",
+			a_argCount, a_argCount == 1 ? "" : "s", Clip(a_arg));
+
+		if (a_argCount > 1) {
+			spdlog::warn("[bridge] page->dll: {} extra arguments ignored", a_argCount - 1);
+		}
+
+		bool wasStringWrapped = false;
+		const auto message = Decode(a_arg, a_mayBeWrapped, wasStringWrapped);
+
+		if (message.is_discarded()) {
+			spdlog::warn("[bridge] page->dll: argument is not valid JSON - ignored");
+			return;
+		}
+
+		if (wasStringWrapped) {
+			spdlog::info("[bridge] page->dll: the message arrived as a JSON STRING and was decoded twice");
+		}
+
+		Dispatch(message);
 	}
 }

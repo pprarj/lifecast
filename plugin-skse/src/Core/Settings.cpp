@@ -57,10 +57,16 @@ namespace Lifecast::Core::Settings
 			return true;
 		}
 
-		const std::array<Key, 3> kKeys{ {
+		bool IsBackend(const json& a_value)
+		{
+			return a_value.is_string() && (a_value == "auto" || a_value == "prisma" || a_value == "meridian");
+		}
+
+		const std::array<Key, 4> kKeys{ {
 			{ "presetsSort", "name", &IsSortOrder },
 			{ "panelScale", 1.0, &IsPanelScale },
 			{ "sectionsOpen", json::object(), &IsSectionsOpen },
+			{ "backend", "auto", &IsBackend },
 		} };
 
 		json g_values = json::object();
@@ -224,5 +230,11 @@ namespace Lifecast::Core::Settings
 		Panel::Bridge::On("settings-set", &OnSet);
 		g_installed = true;
 		spdlog::info("[settings] installed - {} key(s)", kKeys.size());
+	}
+
+	std::string Backend()
+	{
+		const auto it = g_values.find("backend");
+		return it != g_values.end() && IsBackend(*it) ? it->get<std::string>() : std::string("auto");
 	}
 }

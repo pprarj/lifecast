@@ -10,21 +10,21 @@
 //   F4, RaceMenu showing -> the Lifecast
 //   RaceSex Menu closes  -> the panel is hidden, never destroyed
 //
-// Showing the Lifecast means taking Meridian's focus, because an unfocused
-// browser receives no input at all. A focused browser swallows every key and
-// mouse event, this plugin's own included - so the ways back are armed BEFORE
-// focus is asked for, every single time:
+// Showing the Lifecast means taking the backend's focus (Panel/Panel.h),
+// because an unfocused page receives no input at all. A focused page takes
+// the keyboard and the mouse - so the ways back are armed BEFORE focus is
+// asked for, every single time:
 //
-//   1. F4, registered with Meridian as the panel's focus chord. Meridian
-//      evaluates chords before a focused browser can swallow the key, so this
-//      works even when the page is broken or frozen. It is armed only while
-//      the panel is shown: a chord left armed on a hidden browser would hand
-//      focus to something invisible.
+//   1. F4, armed as the panel's focus chord. The backend hears it before the
+//      page can swallow the key (Meridian in its own input layer, Prisma in a
+//      sink prepended on the input manager), so this works even when the page
+//      is broken or frozen. It is armed only while the panel is shown: a chord
+//      left armed on a hidden page would hand focus to something invisible.
 //   2. A control inside the page, which sends "show-racemenu" through the
 //      bridge. It works even if the chord does not, because the page is
 //      exactly what holds the keyboard and the mouse.
 //
-// Whichever way focus goes away - F4, the page, or another Meridian consumer
+// Whichever way focus goes away - F4, the page, or another consumer of the framework
 // claiming it - the switcher notices on its next input tick and puts
 // RaceMenu back on screen, so the player is never left with a visible panel
 // that cannot be used and a film that cannot be seen. If focus is never

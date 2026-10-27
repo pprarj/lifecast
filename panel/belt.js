@@ -187,6 +187,9 @@ const LifecastBelt = (() => {
     b.type = "button";
     b.tabIndex = -1;
     b.className = "panel-button belt-quick";
+    // A plain id per quick button: a test harness that clicks by selector
+    // takes only an id, a class or a tag.
+    b.id = "quick-" + (q.key || q.send);
     b.textContent = q.name;
     if (q.title) {
       b.title = q.title;

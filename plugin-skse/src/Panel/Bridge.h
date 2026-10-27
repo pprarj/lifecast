@@ -10,9 +10,12 @@
 // Page to DLL: the page calls window.Lifecast.send(message) - a fire-and-forget
 // binding. It returns undefined at once; the page never waits on the DLL.
 //
-// DLL to page: Send() below pushes the same shape through a Meridian event
-// function. The page subscribes once with window.Lifecast.on("message", fn)
-// and receives the message as JSON text.
+// DLL to page: Send() below pushes the same shape through the panel's backend
+// (Panel/Backend.h). The page subscribes once with
+// window.Lifecast.on("message", fn) and receives the message as JSON text.
+// On Meridian window.Lifecast is the framework's own binding object; on Prisma
+// the page builds it (panel/bridge.js) over two globals, so the rest of the
+// page is the same on both.
 //
 // Why fire-and-forget both ways and no promise natives: a request that
 // expects an answer becomes two messages, and the page stays responsive
@@ -25,8 +28,6 @@
 
 #pragma once
 
-#include "MeridianUIAPI/JSTypes.h"
-
 #include <nlohmann/json.hpp>
 
 namespace Lifecast::Panel::Bridge
@@ -37,17 +38,8 @@ namespace Lifecast::Panel::Bridge
 	// update one without the other.
 	inline constexpr std::uint32_t kProtocolVersion = 1;
 
-	// window.<kObjectName>.send(...) and window.<kObjectName>.on(...).
-	inline constexpr auto kObjectName = "Lifecast";
-	inline constexpr auto kSendFunction = "send";
-	inline constexpr auto kEventFunction = "on";
-
-	// The single event name every DLL-to-page message travels under. The
-	// page dispatches on the "type" field, not on the event name.
-	inline constexpr auto kEventName = "message";
-
-	// Handles one message type from the page. Runs on the game thread: the
-	// send binding is registered with executeInGameThread, so a handler may
+	// Handles one message type from the page. Runs on the game thread: every
+	// backend hands page messages over from the game thread, so a handler may
 	// touch Skyrim state directly.
 	using Handler = void (*)(const nlohmann::json& a_data);
 
@@ -56,16 +48,17 @@ namespace Lifecast::Panel::Bridge
 	void On(std::string_view a_type, Handler a_handler);
 
 	// Pushes a message to the page. Dropped, with a log line, when there is
-	// no browser to push to. Every message is logged as sent; long ones are
+	// no page to push to. Every message is logged as sent; long ones are
 	// cut, unless a_logWhole - for messages whose logged text is meant to be
 	// replayed into the page as a test case, where a cut line would not parse.
 	void Send(std::string_view a_type, const nlohmann::json& a_data = nlohmann::json::object(),
 		bool a_logWhole = false);
 
-	// The bindings the browser has to be created with. The event function in
-	// particular can only be passed at creation time - AddFunctionCallback
-	// cannot add one later. The array and what it points to live for the
-	// whole process.
-	Meridian::JS::JSFuncInfo* const* Bindings();
-	std::uint32_t BindingCount();
+	// One argument the page passed to send(), handed over by a backend on the
+	// game thread. a_argCount is how many arguments the page passed (only the
+	// first is read). a_mayBeWrapped: the backend delivers a JS string QUOTED
+	// (Meridian does), so a message sent as JSON.stringify(msg) arrives as a
+	// JSON string and is decoded a second time. On a backend that delivers the
+	// argument raw (Prisma), the one decode is the only one.
+	void Receive(const char* a_arg, int a_argCount, bool a_mayBeWrapped);
 }

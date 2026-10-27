@@ -3,48 +3,38 @@
 
 #include "Panel/Panel.h"
 
-#include "Core/MeridianLink.h"
+#include "Core/Settings.h"
+#include "Panel/Backend.h"
 #include "Panel/Bridge.h"
+#include "Panel/MeridianBackend.h"
+#include "Panel/PrismaBackend.h"
 #include "Version.h"
 
 namespace Lifecast::Panel
 {
 	namespace
 	{
-		namespace MUI = Meridian::UI;
-
-		MUI::IUIPlatformAPI::BrowserRefHandle g_handle = MUI::IUIPlatformAPI::InvalidBrowserRefHandle;
-		Meridian::CEF::IBrowser* g_browser = nullptr;
-		bool g_visible = false;
-		bool g_card = false;
-
-		// Set by Meridian's shutdown callback. From then on no browser call
-		// is allowed, and Ensure() must not create a new one.
-		std::atomic_bool g_shutdown = false;
-
-		void OnMeridianShutdown()
+		// The order is the choice under "auto": the first that answered wins.
+		// A new backend is a row here and a file of its own.
+		struct Row
 		{
-			g_shutdown = true;
-			g_browser = nullptr;
-			g_handle = MUI::IUIPlatformAPI::InvalidBrowserRefHandle;
-			spdlog::info("[panel] Meridian is shutting down - browser dropped");
-		}
+			const char* name;
+			Backend& (*get)();
+		};
 
-		void LogState(const char* a_what)
+		constexpr std::array<Row, 2> kTable{ {
+			{ "prisma", &PrismaBackend },
+			{ "meridian", &MeridianBackend },
+		} };
+
+		Backend* g_backend = nullptr;
+		bool     g_chosen = false;
+		bool     g_visible = false;
+		bool     g_card = false;
+
+		Backend* Live()
 		{
-			if (!g_browser) {
-				spdlog::info("[panel] {} - no browser", a_what);
-				return;
-			}
-
-			spdlog::info(
-				"[panel] {} - handle {}, browserReady {}, pageLoaded {}, visible {}, focused {}",
-				a_what,
-				g_handle,
-				g_browser->IsBrowserReady(),
-				g_browser->IsPageLoaded(),
-				g_browser->IsBrowserVisible(),
-				g_browser->IsBrowserFocused());
+			return g_backend && g_backend->Exists() ? g_backend : nullptr;
 		}
 
 		// The page says hello when its script starts, and the answer tells it
@@ -64,23 +54,35 @@ namespace Lifecast::Panel
 			}
 
 			const bool compatible = pageProtocol == Bridge::kProtocolVersion;
-			spdlog::info("[panel] hello from page {} speaking protocol v{} - {}",
-				pageVersion, pageProtocol, compatible ? "compatible" : "INCOMPATIBLE");
+			spdlog::info("[panel] hello from page {} speaking protocol v{} - {}", pageVersion, pageProtocol,
+				compatible ? "compatible" : "INCOMPATIBLE");
 
 			Bridge::Send("hello", {
 				{ "dll", Version::kString },
 				{ "protocol", Bridge::kProtocolVersion },
 				{ "compatible", compatible },
 				{ "visible", g_visible },
+				{ "backend", BackendName() },
 			});
 		}
 
 		// The page says what it drew for the card, read from its own DOM: the
-		// browser's state in the log is the browser's, this is the page's.
+		// backend's state in the log is the backend's, this is the page's.
 		void OnCardState(const nlohmann::json& a_data)
 		{
 			spdlog::info("[panel] card state from the page: {}", a_data.dump());
-			LogState("card state read");
+			if (auto* b = Live()) {
+				b->LogState("card state read");
+			}
+		}
+
+		void LogState(const char* a_what)
+		{
+			if (auto* b = Live()) {
+				b->LogState(a_what);
+			} else {
+				spdlog::info("[panel] {} - no page", a_what);
+			}
 		}
 	}
 
@@ -90,59 +92,92 @@ namespace Lifecast::Panel
 		Bridge::On("card-state", &OnCardState);
 	}
 
+	void OnInputLoaded()
+	{
+		PrismaStart();
+	}
+
+	void Choose()
+	{
+		if (g_chosen) {
+			return;
+		}
+		g_chosen = true;
+
+		const auto setting = Core::Settings::Backend();
+
+		std::string answered;
+		for (const auto& row : kTable) {
+			const bool ok = row.get().Available();
+			answered += fmt::format("{}{} {}", answered.empty() ? "" : ", ", row.name, ok ? "answered" : "absent");
+		}
+
+		Backend*    forced = nullptr;
+		const char* note = "";
+		if (setting != "auto") {
+			for (const auto& row : kTable) {
+				if (setting == row.name) {
+					forced = &row.get();
+				}
+			}
+			if (forced && !forced->Available()) {
+				forced = nullptr;
+				note = " - the forced backend did not answer, so auto decides";
+			}
+		}
+
+		if (forced) {
+			g_backend = forced;
+		} else {
+			for (const auto& row : kTable) {
+				if (row.get().Available()) {
+					g_backend = &row.get();
+					break;
+				}
+			}
+		}
+
+		if (!g_backend) {
+			spdlog::warn("[panel] backend: setting \"{}\" ({}) -> none - no panel; the Lifecast stays out of the way and "
+						 "RaceMenu opens as it always does",
+				setting, answered);
+			return;
+		}
+		spdlog::info("[panel] backend: setting \"{}\" ({}) -> {}{}", setting, answered, g_backend->Name(), note);
+	}
+
+	const char* BackendName()
+	{
+		return g_backend ? g_backend->Name() : "none";
+	}
+
 	bool Ensure()
 	{
-		if (g_shutdown) {
+		if (!g_chosen) {
+			Choose();
+		}
+		if (!g_backend) {
 			return false;
 		}
-
-		if (g_browser) {
+		if (g_backend->Exists()) {
 			return true;
 		}
-
-		auto* platform = Core::MeridianLink::Platform();
-		if (!platform) {
-			spdlog::error("[panel] the Meridian platform API never answered - no panel");
+		if (!g_backend->Create()) {
 			return false;
 		}
-
-		static bool s_shutdownRegistered = false;
-		if (!s_shutdownRegistered) {
-			platform->RegisterOnShutdown(&OnMeridianShutdown);
-			s_shutdownRegistered = true;
-		}
-
-		Meridian::CEF::IBrowser* browser = nullptr;
-		const auto handle = platform->AddOrGetBrowser(
-			kBrowserName,
-			Bridge::Bindings(),
-			Bridge::BindingCount(),
-			kStartUrl,
-			browser);
-
-		spdlog::info("[panel] AddOrGetBrowser(\"{}\", \"{}\") = handle {}, browser {}",
-			kBrowserName, kStartUrl, handle, static_cast<const void*>(browser));
-
-		if (handle == MUI::IUIPlatformAPI::InvalidBrowserRefHandle || !browser) {
-			spdlog::error("[panel] the browser was refused - no panel");
-			return false;
-		}
-
-		g_handle = handle;
-		g_browser = browser;
-
-		// Created hidden: what shows it is the caller's decision, never a
-		// side effect of creation.
-		g_browser->SetBrowserVisible(false);
 		g_visible = false;
-
-		LogState("created");
 		return true;
+	}
+
+	bool Exists()
+	{
+		return Live() != nullptr;
 	}
 
 	void SetVisible(bool a_visible)
 	{
-		if (!g_browser) {
+		auto* b = Live();
+		if (!b) {
 			return;
 		}
 
@@ -151,7 +186,7 @@ namespace Lifecast::Panel
 			Bridge::Send("card", { { "on", false } });
 		}
 
-		g_browser->SetBrowserVisible(a_visible);
+		b->SetVisible(a_visible);
 		g_visible = a_visible;
 		LogState(a_visible ? "shown" : "hidden");
 
@@ -160,17 +195,18 @@ namespace Lifecast::Panel
 
 	bool IsVisible()
 	{
-		return g_browser && g_visible;
+		return Live() && g_visible;
 	}
 
 	void ShowCard(const char* a_key)
 	{
-		if (!g_browser) {
+		auto* b = Live();
+		if (!b) {
 			return;
 		}
 
-		g_browser->SetBrowserFocused(false);
-		g_browser->SetBrowserVisible(true);
+		b->SetFocused(false);
+		b->SetVisible(true);
 		g_visible = false;
 		g_card = true;
 		LogState("card shown");
@@ -181,51 +217,50 @@ namespace Lifecast::Panel
 
 	void ArmFocusChord(std::uint32_t a_key1, std::uint32_t a_key2)
 	{
-		if (!g_browser) {
-			return;
+		if (auto* b = Live()) {
+			b->ArmChord(a_key1, a_key2);
 		}
-
-		g_browser->ToggleBrowserFocusByKeys(a_key1, a_key2);
-		spdlog::info("[panel] focus chord armed: 0x{:X} + 0x{:X}", a_key1, a_key2);
 	}
 
 	void DisarmFocusChord()
 	{
-		if (!g_browser) {
-			return;
+		if (auto* b = Live()) {
+			b->DisarmChord();
 		}
-
-		g_browser->ToggleBrowserFocusByKeys(0, 0);
-		spdlog::info("[panel] focus chord disarmed");
 	}
 
 	void RequestFocus()
 	{
-		if (!g_browser) {
-			return;
+		if (auto* b = Live()) {
+			b->SetFocused(true);
+			LogState("focus requested");
 		}
-
-		g_browser->SetBrowserFocused(true);
-		LogState("focus requested");
 	}
 
 	void ReleaseFocus()
 	{
-		if (!g_browser) {
-			return;
+		if (auto* b = Live()) {
+			b->SetFocused(false);
+			LogState("focus released");
 		}
-
-		g_browser->SetBrowserFocused(false);
-		LogState("focus released");
 	}
 
 	bool IsFocused()
 	{
-		return g_browser && g_browser->IsBrowserFocused();
+		auto* b = Live();
+		return b && b->IsFocused();
 	}
 
-	Meridian::CEF::IBrowser* Browser()
+	bool PageReady()
 	{
-		return g_shutdown ? nullptr : g_browser;
+		auto* b = Live();
+		return b && b->PageReady();
+	}
+
+	void Post(const std::string& a_text)
+	{
+		if (auto* b = Live()) {
+			b->Post(a_text.c_str());
+		}
 	}
 }

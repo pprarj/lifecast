@@ -5,9 +5,10 @@
 // RaceMenu's own film on F4, owns the message bridge to the page (Panel/), and
 // edits the face morphs live from the panel (Edit/) - the body too, through
 // OBody, when OBody answers - and ends the menu with the character's name
-// (Edit/Finish.h). At startup it also answers
-// one question per log line: does Meridian UI answer, at which version, and
-// which SKEE interfaces are reachable from outside RaceMenu.
+// (Edit/Finish.h). The panel is drawn by Prisma UI or Meridian UI, whichever
+// answers (Panel/Panel.h). At startup it also answers one question per log
+// line: which of the two answered, at which version, and which SKEE
+// interfaces are reachable from outside RaceMenu.
 //
 // There is no console test here and there cannot be one - the Skyrim console
 // does not call a global function of a plugin. What calls the code below is
@@ -113,6 +114,11 @@ namespace
 			// application thread and rejects a first API request coming from
 			// a later worker-thread message such as kDataLoaded.
 			Lifecast::Core::MeridianLink::QueryExtensions("kInputLoaded");
+
+			// Prisma UI's API, and the panel's exit-chord sink for it. The sink
+			// is prepended, so it hears a key before every sink added later -
+			// the Switcher's own included, which is added at kDataLoaded.
+			Lifecast::Panel::OnInputLoaded();
 			break;
 
 		case SKSE::MessagingInterface::kDataLoaded:
@@ -174,6 +180,11 @@ namespace
 
 			// The panel's own preferences, kept across games.
 			Lifecast::Core::Settings::Install();
+
+			// Which web UI framework draws the panel: needs the "backend"
+			// setting, read just above, and both frameworks' answers, which
+			// came at kInputLoaded.
+			Lifecast::Panel::Choose();
 
 			// The presets on disk, listed for the panel; saving and loading
 			// one, which RaceMenu does at the panel's request; and the guard

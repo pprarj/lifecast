@@ -1,7 +1,8 @@
 // keyboard.js
-// Lifecast - two corrections to the keyboard as Meridian UI delivers it to
-// text fields. Both measured in the game, ABNT2 layout:
+// Lifecast - corrections to the keyboard as each backend delivers it to text
+// fields. Measured in the game, ABNT2 layout.
 //
+// Meridian UI:
 //   1. A dead key does not compose. The accent arrives as its own character
 //      and the next vowel as another: "~" then "a" gives "~a", not the
 //      composed letter. Here the pair is joined back into one character.
@@ -9,12 +10,25 @@
 //      dropped by KEY STATE: a second keydown for a key that has not come up
 //      again, close behind the first, is not a person pressing twice.
 //
+// Prisma UI:
+//   3. A dead key does not compose either, and differently: the accent key
+//      arrives as a keydown that inserts NOTHING (the acute on ABNT2 measured
+//      as keydown "[" keyCode 219, no input, no composition), and the vowel
+//      after it arrives plain. Here the accent is read from the keydown and
+//      put on the next character. No doubled press was seen on Prisma, so 2
+//      does not run there.
+//
 // Everything happens in the page and applies to every text field in it.
-// Nothing here depends on the DLL. When Meridian delivers the keyboard
-// correctly, neither correction has anything to do.
+// Which backend is running comes from the bridge (LifecastBridge.backend());
+// before the bridge has attached, nothing is corrected. When a backend
+// delivers the keyboard correctly, its corrections have nothing to do.
 "use strict";
 
 (() => {
+  function backend() {
+    return typeof LifecastBridge !== "undefined" ? LifecastBridge.backend() : null;
+  }
+
   // --- The doubled press ---------------------------------------------------
   //
   // Measured on the round of 2026-09-26 (Lifecast.log, page clock), five
@@ -76,6 +90,9 @@
   }
 
   document.addEventListener("keydown", (event) => {
+    if (backend() !== "meridian") {
+      return;
+    }
     const code = event.code;
     const now = performance.now();
 
@@ -105,12 +122,18 @@
   }, true);
 
   document.addEventListener("keyup", (event) => {
+    if (backend() !== "meridian") {
+      return;
+    }
     if (event.code) {
       heldSince.delete(event.code);
     }
   }, true);
 
   document.addEventListener("beforeinput", (event) => {
+    if (backend() !== "meridian") {
+      return;
+    }
     const el = event.target;
     if (!isTextField(el) || event.inputType !== "insertText" || event.data === null) {
       return;
@@ -160,5 +183,125 @@
     event.preventDefault();
     el.setRangeText(composed, pos - 1, pos, "end");
     el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: composed }));
+  }, true);
+
+  // --- 3. The dead key on Prisma -------------------------------------------
+  //
+  // A dead key is told from an ordinary key by what follows it: an ordinary
+  // key's keydown is followed by its own insertion, a dead key's is not. So a
+  // keydown that COULD be a dead key is held as a candidate; if an insertion
+  // comes before the next keydown, it was an ordinary key (on a US layout the
+  // same keyCode 219 is "[", and it types "["); if another keydown comes
+  // first, the candidate was a dead key and its accent waits for the next
+  // character.
+  //
+  // Which accent: ABNT2, by keyCode and Shift. Only the acute was measured on
+  // Prisma; the rest of the table is the ABNT2 layout itself. Another layout's
+  // dead keys are not in it and stay as Prisma delivers them.
+  //
+  //   keyCode 219        acute   (Shift: grave)
+  //   keyCode 222        tilde   (Shift: circumflex)
+  //   keyCode 54 + Shift diaeresis
+  function prismaAccent(event) {
+    if (event.ctrlKey || event.altKey || event.metaKey) {
+      return null;
+    }
+    switch (event.keyCode) {
+      case 219:
+        return event.shiftKey ? { char: "`", mark: "\u0300" } : { char: "\u00b4", mark: "\u0301" };
+      case 222:
+        return event.shiftKey ? { char: "^", mark: "\u0302" } : { char: "~", mark: "\u0303" };
+      case 54:
+        return event.shiftKey ? { char: "\u00a8", mark: "\u0308" } : null;
+      default:
+        return null;
+    }
+  }
+
+  let candidate = null; // accent of a keydown that has not inserted anything yet
+  let armed = null;     // accent of a dead key, waiting for the next character
+
+  document.addEventListener("keydown", (event) => {
+    if (backend() !== "prisma") {
+      return;
+    }
+    if (candidate) {
+      // Another key went down and the candidate inserted nothing: dead key.
+      armed = candidate;
+      candidate = null;
+    }
+    if (NEUTRAL_KEYS.has(event.key)) {
+      return;
+    }
+    const accent = prismaAccent(event);
+    if (accent) {
+      if (armed) {
+        // Two dead keys in a row: Windows writes the first accent and keeps
+        // the second waiting. Written here the same way.
+        const el = document.activeElement;
+        if (isTextField(el)) {
+          insertAt(el, armed.char);
+        }
+        armed = null;
+      }
+      candidate = accent;
+      return;
+    }
+    if (event.key.length > 1) {
+      // Backspace, arrows, Enter and the like: the accent is abandoned.
+      armed = null;
+    }
+  }, true);
+
+  // The page's own insertions dispatch "input" too; those are not keys.
+  let selfInput = false;
+
+  function insertAt(el, text, start, end) {
+    const s = start === undefined ? el.selectionStart : start;
+    const e = end === undefined ? el.selectionEnd : end;
+    if (s === null || e === null) {
+      return false;
+    }
+    el.setRangeText(text, s, e, "end");
+    selfInput = true;
+    try {
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+    } finally {
+      selfInput = false;
+    }
+    return true;
+  }
+
+  // Read on "input", after the character is in the field, and not on
+  // "beforeinput": "input" is what was seen on Prisma; whether it fires
+  // "beforeinput" was not measured. The character just typed is replaced.
+  document.addEventListener("input", (event) => {
+    if (backend() !== "prisma" || selfInput) {
+      return;
+    }
+    if (candidate) {
+      // The candidate key inserted something: an ordinary key. Let it be.
+      candidate = null;
+      return;
+    }
+    const el = event.target;
+    const data = event.data;
+    if (!armed || !isTextField(el) || typeof data !== "string" || data.length !== 1) {
+      return;
+    }
+    const pending = armed;
+    armed = null;
+    const pos = el.selectionStart;
+    if (pos === null || pos !== el.selectionEnd || pos < 1 || el.value.charAt(pos - 1) !== data) {
+      return;
+    }
+    let text;
+    if (data === " ") {
+      text = pending.char; // accent then space is the accent alone
+    } else {
+      const composed = (data + pending.mark).normalize("NFC");
+      text = composed.length === 1 ? composed : pending.char + data; // no such letter: both, as Windows does
+    }
+    insertAt(el, text, pos - 1, pos);
   }, true);
 })();

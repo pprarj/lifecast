@@ -22,9 +22,9 @@ namespace Lifecast::Panel::Switcher
 		// RaceMenu front-end already know.
 		constexpr std::uint32_t kSwapKey = Key::kF4;
 
-		// How long the panel may stay on screen waiting for Meridian to grant
-		// focus. Focus asked for before the page has loaded is applied at
-		// load end, so this covers a slow first load; past it, something is
+		// How long the panel may stay on screen waiting for the backend to
+		// grant focus. Focus asked for before the page has loaded is applied
+		// at load end, so this covers a slow first load; past it, something is
 		// wrong and the player gets RaceMenu back rather than a panel that
 		// does not answer.
 		constexpr auto kFocusGrace = std::chrono::seconds(5);
@@ -39,7 +39,8 @@ namespace Lifecast::Panel::Switcher
 
 		Mode g_mode = Mode::kClosed;
 
-		// Focus is applied asynchronously, so "not focused" right after the
+		// Focus is applied asynchronously - on Prisma the read changes on the
+		// next frame, not in the call - so "not focused" right after the
 		// request is normal. Losing focus only counts once it has been seen.
 		bool              g_focusSeen = false;
 		Clock::time_point g_shownAt{};
@@ -588,7 +589,9 @@ namespace Lifecast::Panel::Switcher
 
 				if (!a_event || (g_mode != Mode::kRaceMenu && g_mode != Mode::kPortraits)) {
 					// With the Lifecast on screen, F4 never gets here: it is
-					// the panel's focus chord and Meridian consumes it.
+					// the panel's focus chord, and the backend consumes it
+					// (Meridian in its own input layer; Prisma in a sink
+					// prepended before this one, which returns kStop).
 					return RE::BSEventNotifyControl::kContinue;
 				}
 
@@ -651,7 +654,7 @@ namespace Lifecast::Panel::Switcher
 
 	void ShowLifecast()
 	{
-		if ((g_mode != Mode::kRaceMenu && g_mode != Mode::kPortraits) || !Panel::Browser()) {
+		if ((g_mode != Mode::kRaceMenu && g_mode != Mode::kPortraits) || !Panel::Exists()) {
 			return;
 		}
 
@@ -693,7 +696,7 @@ namespace Lifecast::Panel::Switcher
 
 	void ShowPortraits()
 	{
-		if (g_mode != Mode::kLifecast || !Panel::Browser()) {
+		if (g_mode != Mode::kLifecast || !Panel::Exists()) {
 			return;
 		}
 		if (!PortraitsLoaded()) {

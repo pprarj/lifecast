@@ -57,6 +57,8 @@
   const section = LifecastControls.section("Presets");
 
   const field = LifecastControls.el("input", "preset-field");
+  // Plain ids for a test harness that clicks by selector (id, class or tag).
+  field.id = "preset-search";
   field.type = "search";
   field.placeholder = "Search, or a name to save as";
   field.spellcheck = false;
@@ -66,6 +68,7 @@
   const byName = LifecastControls.el("button", "panel-button", "A-Z");
   const byTime = LifecastControls.el("button", "panel-button", "Newest");
   const save = LifecastControls.el("button", "panel-button preset-save", "Save");
+  save.id = "preset-save";
   for (const b of [byName, byTime, save]) {
     b.type = "button";
     b.tabIndex = -1;

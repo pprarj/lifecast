@@ -3,9 +3,8 @@ cmake_minimum_required(VERSION 3.21)
 # ---------------------------------------------------------------------------
 # Lifecast - a modern interface for RaceMenu.
 #
-# The plugin proves the build chain compiles and that the two handshakes this
-# project depends on answer at runtime - Meridian UI, which is the only panel
-# backend, and SKEE/RaceMenu.
+# The panel is drawn by one of two web UI frameworks, Prisma UI or Meridian UI,
+# chosen at run time (src/Panel/Panel.h); RaceMenu is reached through SKEE.
 # ---------------------------------------------------------------------------
 
 project(
@@ -90,8 +89,10 @@ add_commonlibsse_plugin(
         src/Edit/Tints.cpp
         src/Edit/Undress.cpp
         src/Panel/Bridge.cpp
+        src/Panel/MeridianBackend.cpp
         src/Panel/Pad.cpp
         src/Panel/Panel.cpp
+        src/Panel/PrismaBackend.cpp
         src/Panel/RaceMenuFilm.cpp
         src/Panel/RaceMenuTabs.cpp
         src/Panel/Stage.cpp
@@ -130,6 +131,7 @@ target_compile_options(${PROJECT_NAME} PRIVATE "/utf-8")
 # extern/ on the include path is what makes the vendored third-party headers
 # addressable the way their own guides document them:
 #   #include "MeridianUIAPI/API.h"
+#   #include "PrismaUI/PrismaUI_API.h"
 target_include_directories(${PROJECT_NAME} PRIVATE
     # src itself, so that a module in a subfolder says "Core/Log.h" like every
     # other module does. Without it an include only resolves relative to the

@@ -57,7 +57,7 @@
   });
 
   // Back to RaceMenu from inside the page. The DLL hides this page, which
-  // also releases Meridian's focus, and shows RaceMenu's film again.
+  // also releases the backend's focus, and shows RaceMenu's film again.
   function toRaceMenu() {
     if (!LifecastBridge.send("show-racemenu")) {
       setStatus("no bridge", "bad");
