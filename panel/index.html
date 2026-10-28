@@ -120,10 +120,10 @@
     <!--
       Here and not next to Finish (D130): a misclick on the way to undo must
       not end the menu.
-      Undo and redo are buttons and not Ctrl+Z / Ctrl+Y on purpose: Meridian
-      delivers some key presses twice, ~15 ms apart, as fresh presses
-      (measured in keyboard.js), and an undo that fires twice undoes a step
-      the player never asked about and says nothing. A click cannot double.
+      Undo and redo are buttons first (D130), and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z
+      do the same (undokeys.js, 1.5 E4): Meridian delivers some key presses
+      twice, ~15 ms apart, as fresh presses (measured in keyboard.js), and
+      the shortcut drops the second one by key state, so a press is one step.
     -->
     <button id="undo" class="panel-button" type="button" disabled>Undo</button>
     <button id="redo" class="panel-button" type="button" disabled>Redo</button>
@@ -141,6 +141,7 @@
   <script src="bridge.js"></script>
   <script src="settings.js"></script>
   <script src="history.js"></script>
+  <script src="undokeys.js"></script>
   <script src="card.js"></script>
   <script src="panel.js"></script>
   <script src="controls.js"></script>
