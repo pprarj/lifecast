@@ -20,4 +20,14 @@ namespace Lifecast::Panel::Smf::Common
 
 	// ASCII lower case; other bytes as they are.
 	std::string Lower(std::string a_s);
+
+	// A chip of the panel's head (.region-chip): the one on is drawn in the
+	// accent over the selected row colour. True when clicked.
+	bool Chip(const char* a_label, bool a_on);
+
+	// Signs a list as received (fields joined by a tab, one line per item),
+	// compares it with the DLL's stamp and answers "list-sig" once per list
+	// (defined in Face.cpp, which counts the answers).
+	void Verify(const std::string& a_key, const std::string& a_canonical, std::size_t a_n,
+		const nlohmann::json& a_stamp);
 }

@@ -6,6 +6,7 @@
 #include "Panel/Smf/Common.h"
 #include "Panel/Smf/DeadKeys.h"
 #include "Panel/Smf/Face.h"
+#include "Panel/Smf/Skin.h"
 #include "Panel/Smf/Theme.h"
 
 #include "Panel/Bridge.h"
@@ -93,6 +94,20 @@ namespace Lifecast::Panel::Smf
 		StageState                                g_stage;
 		std::uint32_t                             g_received = 0;
 		std::uint32_t                             g_ignored = 0;
+
+		// The look is asked when the view comes on screen, as the page asks it
+		// when it attaches (look.js). On a new game the view is there before
+		// the RaceSex Menu has built its head-part lists, and that first
+		// reading comes from the data handler (1.6 E4, cell N); the page only
+		// attaches once it has loaded. So the view asks once more when
+		// RaceMenu's film arrives built: a "sliders" or "racemenu-categories"
+		// with entries that is not the answer to the view's own ask (the
+		// first one of each after coming on screen) - the DLL sends those
+		// when the film's list changes.
+		bool                                      g_lookAfterFilm = false;
+		Clock::time_point                         g_shownAt{};
+		int                                       g_slidersSinceShown = 0;
+		int                                       g_categoriesSinceShown = 0;
 
 		// What the view sends, until a task hands it to the bridge.
 		std::mutex               g_outMx;
@@ -284,6 +299,23 @@ namespace Lifecast::Panel::Smf
 			Send("sliders-get");
 			Send("stage-get");
 			Face::Ask();
+			Skin::Ask();
+			g_lookAfterFilm = false;
+			g_shownAt = Clock::now();
+			g_slidersSinceShown = 0;
+			g_categoriesSinceShown = 0;
+		}
+
+		void AskLookAfterFilm(const char* a_what, std::size_t a_n)
+		{
+			if (g_lookAfterFilm || a_n == 0) {
+				return;
+			}
+			g_lookAfterFilm = true;
+			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - g_shownAt).count();
+			spdlog::info("[smf] view: RaceMenu's film arrived built ({} {}, {} ms after the view asked) - asking the look again",
+				a_n, a_what, ms);
+			Send("look-get");
 		}
 
 		void DrawCard(IG::ImGuiIO* a_io)
@@ -396,9 +428,12 @@ namespace Lifecast::Panel::Smf
 			IG::PopID();
 		}
 
-		// A chip of the panel's head (.region-chip): the one shown in the
-		// accent over the selected row colour.
 		bool Chip(const char* a_label, bool a_on)
+		{
+			return Common::Chip(a_label, a_on);
+		}
+
+		bool ChipDraw(const char* a_label, bool a_on)
 		{
 			if (a_on) {
 				IG::PushStyleColor(IG::ImGuiCol_Button, Theme::Color::RowSelected());
@@ -484,14 +519,32 @@ namespace Lifecast::Panel::Smf
 		// The sections: the belt's categories (.belt-cat), and the small
 		// panel shows the one that is on.
 		constexpr const char* kSectionLabels[] = { "SLIDERS###sec-sliders", "LOOK###sec-look", "RACE & SEX###sec-race",
-			"RACE FACES###sec-faces" };
-		constexpr const char* kSectionTitles[] = { "Sliders", "Look", "Race & Sex", "Race Faces" };
-		constexpr const char* kSectionRects[] = { "sec:sliders", "sec:look", "sec:race", "sec:faces" };
+			"RACE FACES###sec-faces", "SKIN & TINTS###sec-tints", "PAINT###sec-paint", "OBODY###sec-obody" };
+		constexpr const char* kSectionTitles[] = { "Sliders", "Look", "Race & Sex", "Race Faces", "Skin & Tints", "Paint",
+			"OBody" };
+		constexpr const char* kSectionRects[] = { "sec:sliders", "sec:look", "sec:race", "sec:faces", "sec:tints",
+			"sec:paint", "sec:obody" };
+		constexpr int kSections = 7;
+		constexpr int kSectionBody = 6;
+
+		// The OBody section is there only while OBody answers with presets
+		// (body.js); leaving it on when it goes falls back to the first one.
+		bool SectionShown(int a_i)
+		{
+			return a_i != kSectionBody || Skin::BodyPresent();
+		}
 
 		void DrawCategories()
 		{
 			auto* dl = IG::GetWindowDrawList();
-			for (int i = 0; i < 4; ++i) {
+			if (!SectionShown(g_section)) {
+				g_section = 0;
+				Common::LayoutSoon();
+			}
+			for (int i = 0; i < kSections; ++i) {
+				if (!SectionShown(i)) {
+					continue;
+				}
 				if (i > 0) {
 					IG::SameLine(0.0f, Theme::Px(2.0f));
 				}
@@ -536,8 +589,17 @@ namespace Lifecast::Panel::Smf
 			case 2:
 				Face::DrawRaceSex();
 				break;
-			default:
+			case 3:
 				Face::DrawRacePresets();
+				break;
+			case 4:
+				Skin::DrawTints();
+				break;
+			case 5:
+				Skin::DrawPaint();
+				break;
+			default:
+				Skin::DrawBody();
 				break;
 			}
 		}
@@ -655,6 +717,11 @@ namespace Lifecast::Panel::Smf
 				[](unsigned char c) { return static_cast<char>(c < 0x80 ? std::tolower(c) : c); });
 			return a_s;
 		}
+
+		bool Chip(const char* a_label, bool a_on)
+		{
+			return ChipDraw(a_label, a_on);
+		}
 	}
 
 	void Receive(const char* a_text)
@@ -705,6 +772,9 @@ namespace Lifecast::Panel::Smf
 			}
 		} else if (type == "sliders") {
 			OnSliders(data);
+			if (g_visible && ++g_slidersSinceShown > 1 && g_slidersReady) {
+				AskLookAfterFilm("sliders", g_sliders.size());
+			}
 		} else if (type == "slider-values") {
 			if (data.contains("values") && data["values"].is_object()) {
 				for (const auto& [k, v] : data["values"].items()) {
@@ -714,9 +784,13 @@ namespace Lifecast::Panel::Smf
 				}
 			}
 		} else if (type == "racemenu-categories") {
+			++g_categoriesSinceShown;
 			if (data.value("ready", false) && data.contains("entries") && data["entries"].is_array()) {
 				g_categories = data["entries"];
 				ApplyOrder();
+				if (g_visible && g_categoriesSinceShown > 1) {
+					AskLookAfterFilm("RaceMenu categories", g_categories.size());
+				}
 			}
 		} else if (type == "stage") {
 			g_stage.ready = data.value("ready", false);
@@ -724,7 +798,7 @@ namespace Lifecast::Panel::Smf
 			g_stage.free = data.value("free", false);
 			g_stage.turn = data.value("turn", 0.0);
 			g_stage.distance = data.value("distance", 0.0);
-		} else if (!Face::Receive(type, data)) {
+		} else if (!Face::Receive(type, data) && !Skin::Receive(type, data)) {
 			++g_ignored;
 		}
 		// A list stamp is answered within seconds (Core/ListSig.cpp); the
@@ -935,6 +1009,7 @@ namespace Lifecast::Panel::Smf
 			g_stage.ready, g_stage.free, g_stage.turn, g_stage.distance, g_zooms, g_received, g_ignored, g_sent);
 		spdlog::info("[smf] view {}: section {}", a_what, g_section);
 		Face::LogState(a_what);
+		Skin::LogState(a_what);
 		spdlog::info("[smf] view layout: {}", g_lastLayout.empty() ? std::string("not drawn yet") : g_lastLayout);
 	}
 }

@@ -664,3 +664,11 @@ namespace Lifecast::Panel::Smf::Face
 			g_rpApplied, g_lookSets, g_sigAgree, g_sigDiffer);
 	}
 }
+
+namespace Lifecast::Panel::Smf::Common
+{
+	void Verify(const std::string& a_key, const std::string& a_canonical, std::size_t a_n, const nlohmann::json& a_stamp)
+	{
+		Face::Verify(a_key, a_canonical, a_n, a_stamp);
+	}
+}
