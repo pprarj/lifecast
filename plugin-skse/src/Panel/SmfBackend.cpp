@@ -5,6 +5,7 @@
 
 #include "Panel/Panel.h"
 #include "Panel/Smf/DeadKeys.h"
+#include "Panel/Smf/Theme.h"
 #include "Panel/Smf/View.h"
 #include "Panel/Stage.h"
 
@@ -125,8 +126,10 @@ namespace Lifecast::Panel
 		}
 
 		// The hybrid form: the window holds the input while the cursor is over
-		// the panel; a press keeps the owner it found until it is released,
-		// and a field being typed in keeps the keyboard.
+		// one of the view's windows (the small panel, the belt, the stage bar;
+		// the screen between them is the game's); a press keeps the owner it
+		// found until it is released, and a field being typed in keeps the
+		// keyboard.
 		bool HybridOwner(IG::ImGuiIO* a_io)
 		{
 			if (g_hold > 0) {
@@ -150,8 +153,8 @@ namespace Lifecast::Panel
 			} else {
 				MenuCursorAt(cx, cy);  // RaceMenu's cursor, while the game does
 			}
-			const bool inside = g_last.drawn && cx >= g_last.x && cx < g_last.x + g_last.w && cy >= g_last.y &&
-			                    cy < g_last.y + g_last.h;
+			const Smf::Box* over = g_last.drawn ? g_last.At(cx, cy) : nullptr;
+			const bool      inside = over != nullptr;
 			if (inside == g_block) {
 				return g_block;
 			}
@@ -167,7 +170,8 @@ namespace Lifecast::Panel
 				c->GetRuntimeData().cursorPosX = cx;  // RaceMenu's cursor goes on from where the OS one was
 				c->GetRuntimeData().cursorPosY = cy;
 			}
-			spdlog::info("[smf] input (hybrid) #{}: {} at {:.0f},{:.0f}", g_flips, inside ? "window" : "game", cx, cy);
+			spdlog::info("[smf] input (hybrid) #{}: {} at {:.0f},{:.0f}{}", g_flips, inside ? "window" : "game", cx, cy,
+				over ? fmt::format(" [{}]", over->name) : std::string());
 			return inside;
 		}
 
@@ -223,7 +227,9 @@ namespace Lifecast::Panel
 					PostExit("ImGui");
 				}
 			}
+			Smf::Theme::FrameStart();
 			g_last = Smf::Draw(block && g_wantFocus);
+			Smf::Theme::FrameEnd();
 			Smf::Flush();
 		}
 
@@ -395,6 +401,7 @@ namespace Lifecast::Panel
 					a_what, g_win->IsOpen.load(), g_win->BlockUserInput.load(), g_wantFocus.load(), g_chordDik.load(),
 					g_chordHits.load(), g_frames, g_flips, SKSEMenuFramework::IsAnyBlockingWindowOpened());
 				Smf::LogState(a_what);
+				Smf::Theme::LogBalance(a_what);
 			}
 		};
 	}

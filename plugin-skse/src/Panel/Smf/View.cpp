@@ -6,6 +6,7 @@
 #include "Panel/Smf/Common.h"
 #include "Panel/Smf/DeadKeys.h"
 #include "Panel/Smf/Face.h"
+#include "Panel/Smf/Theme.h"
 
 #include "Panel/Bridge.h"
 #include "Version.h"
@@ -109,7 +110,10 @@ namespace Lifecast::Panel::Smf
 		// and the wheel toggles whatever its direction (D290).
 		std::uint32_t     g_zooms = 0;
 		Clock::time_point g_wheelZoomAt{};
+		bool              g_scaleHeard = false;
+		float             g_frameLeft = -1.0f;
 		float             g_frameRight = -1.0f;
+		std::string       g_tab = "\x01";  // the slider category shown (a tab id; "\x01" until the first)
 
 		// Where the widgets were last frame, screen pixels, for the state
 		// line: a test bench clicks by it.
@@ -284,20 +288,29 @@ namespace Lifecast::Panel::Smf
 
 		void DrawCard(IG::ImGuiIO* a_io)
 		{
-			IG::SetNextWindowPos(IG::ImVec2{ a_io->DisplaySize.x * 0.5f, 24.0f }, IG::ImGuiCond_Always, IG::ImVec2{ 0.5f, 0.0f });
-			IG::SetNextWindowBgAlpha(0.8f);
+			const Theme::Scope theme(Theme::Kind::kCard);
+			IG::SetNextWindowPos(IG::ImVec2{ a_io->DisplaySize.x * 0.5f, Theme::Px(24.0f) }, IG::ImGuiCond_Always,
+				IG::ImVec2{ 0.5f, 0.0f });
 			IG::Begin("##lifecast-card", nullptr,
 				IG::ImGuiWindowFlags_NoDecoration | IG::ImGuiWindowFlags_NoInputs | IG::ImGuiWindowFlags_AlwaysAutoResize |
 					IG::ImGuiWindowFlags_NoSavedSettings | IG::ImGuiWindowFlags_NoFocusOnAppearing);
-			IG::Text("Lifecast - %s brings the panel back", g_cardKey.c_str());
+			Theme::Body();
+			Theme::LogWindow(Theme::Kind::kCard);
+			IG::TextColored(Theme::Color::Accent(), "Lifecast");
+			IG::SameLine();
+			IG::Text("- %s brings the panel back", g_cardKey.c_str());
 			IG::End();
 		}
 
+		// The bar over the stage (stage.js): turn, then the camera.
 		void DrawStage()
 		{
 			if (!g_stage.ready) {
 				IG::TextDisabled("Character view: %s", g_stage.why.empty() ? "not ready" : g_stage.why.c_str());
 			}
+			IG::AlignTextToFramePadding();
+			IG::TextDisabled("Turn");
+			IG::SameLine();
 			if (IG::Button("<##turn-left")) {
 				Send("stage-move", { { "turn", -kTurnStep } });
 			}
@@ -307,6 +320,10 @@ namespace Lifecast::Panel::Smf
 				Send("stage-move", { { "turn", kTurnStep } });
 			}
 			Rect("turn-right");
+			IG::SameLine();
+			IG::TextDisabled("|");
+			IG::SameLine();
+			IG::TextDisabled("Camera");
 			IG::SameLine();
 			if (g_stage.free) {
 				if (IG::Button("Closer")) {
@@ -343,7 +360,7 @@ namespace Lifecast::Panel::Smf
 				return;
 			}
 			const char* format = a_s.step >= 1.0f ? "%.0f" : "%.2f";
-			IG::SetNextItemWidth(-110.0f);
+			IG::SetNextItemWidth(-Theme::Px(70.0f));
 			float v = a_s.v;
 			if (IG::SliderFloat("##v", &v, a_s.min, a_s.max, format)) {
 				a_s.v = v;
@@ -362,7 +379,7 @@ namespace Lifecast::Panel::Smf
 				a_s.active = false;
 			}
 			IG::SameLine();
-			IG::SetNextItemWidth(100.0f);
+			IG::SetNextItemWidth(Theme::Px(62.0f));
 			if (IG::InputTextWithHint("##typed", "type", a_s.typed, sizeof(a_s.typed),
 					IG::ImGuiInputTextFlags_CharsDecimal | IG::ImGuiInputTextFlags_EnterReturnsTrue |
 						IG::ImGuiInputTextFlags_AutoSelectAll | IG::ImGuiInputTextFlags_CallbackCharFilter,
@@ -379,32 +396,80 @@ namespace Lifecast::Panel::Smf
 			IG::PopID();
 		}
 
-		void DrawSliders()
+		// A chip of the panel's head (.region-chip): the one shown in the
+		// accent over the selected row colour.
+		bool Chip(const char* a_label, bool a_on)
 		{
+			if (a_on) {
+				IG::PushStyleColor(IG::ImGuiCol_Button, Theme::Color::RowSelected());
+				IG::PushStyleColor(IG::ImGuiCol_Text, Theme::Color::Accent());
+			}
+			IG::PushStyleVar(IG::ImGuiStyleVar_FrameRounding, 4.0f);
+			const bool hit = IG::Button(a_label);
+			IG::PopStyleVar();
+			if (a_on) {
+				IG::PopStyleColor(2);
+			}
+			return hit;
+		}
+
+		// The head of Sliders: the search over the RaceMenu categories, as
+		// chips that wrap.
+		void DrawSlidersHead()
+		{
+			IG::SetNextItemWidth(-1.0f);
 			if (IG::InputTextWithHint("##search", "Search sliders", g_search, sizeof(g_search),
 					IG::ImGuiInputTextFlags_CallbackCharFilter, &DeadKeys::Filter)) {
 				spdlog::info("[smf] search field '{}' hex [{}]", g_search, Hex(g_search));
 			}
 			Rect("search");
 			if (!g_slidersReady) {
-				IG::TextDisabled("Reading RaceMenu's sliders...");
 				return;
 			}
-			const auto find = Lower(g_search);
-			if (!IG::BeginTabBar("##lifecast-categories", IG::ImGuiTabBarFlags_FittingPolicyScroll)) {
-				return;
-			}
+			const auto* style = IG::GetStyle();
+			const float right = IG::GetCursorScreenPos().x + IG::GetContentRegionAvail().x;
+			bool        first = true;
 			for (auto& t : g_tabs) {
 				if (t.rows.empty()) {
 					continue;
 				}
-				const auto label = fmt::format("{}###tab-{}", t.label, t.id.empty() ? "general" : t.id);
-				const bool open = IG::BeginTabItem(label.c_str());
-				Rect("tab:" + (t.id.empty() ? std::string("general") : t.id));
-				if (!open) {
+				const auto id = t.id.empty() ? std::string("general") : t.id;
+				if (g_tab == "\x01") {
+					g_tab = id;
+				}
+				const auto  label = fmt::format("{}###tab-{}", t.label, id);
+				const float w = IG::CalcTextSize(t.label.c_str()).x + style->FramePadding.x * 2.0f;
+				if (!first) {
+					IG::SameLine(0.0f, Theme::Px(4.0f));
+					if (IG::GetCursorScreenPos().x + w > right) {
+						IG::NewLine();
+					}
+				}
+				first = false;
+				if (Chip(label.c_str(), g_tab == id) && g_tab != id) {
+					g_tab = id;
+					spdlog::info("[smf] view: slider category {}", id);
+					Common::LayoutSoon();
+				}
+				Rect("tab:" + id);
+			}
+		}
+
+		void DrawSliders()
+		{
+			if (!g_slidersReady) {
+				IG::TextDisabled("Reading RaceMenu's sliders...");
+				return;
+			}
+			const auto find = Lower(g_search);
+			IG::BeginChild("##rows");
+			Theme::Body();
+			for (auto& t : g_tabs) {
+				const auto id = t.id.empty() ? std::string("general") : t.id;
+				// A search looks through every category, as the page's does.
+				if (find.empty() && id != g_tab) {
 					continue;
 				}
-				IG::BeginChild("##rows");
 				for (const auto i : t.rows) {
 					auto& s = g_sliders[i];
 					if (!find.empty() && s.lower.find(find) == std::string::npos) {
@@ -412,50 +477,69 @@ namespace Lifecast::Panel::Smf
 					}
 					DrawRow(s);
 				}
-				IG::EndChild();
-				IG::EndTabItem();
 			}
-			IG::EndTabBar();
+			IG::EndChild();
 		}
 
-		// The sections, one tab each: the sliders, the look, race and sex, the
-		// race's preset faces.
-		void DrawSections()
+		// The sections: the belt's categories (.belt-cat), and the small
+		// panel shows the one that is on.
+		constexpr const char* kSectionLabels[] = { "SLIDERS###sec-sliders", "LOOK###sec-look", "RACE & SEX###sec-race",
+			"RACE FACES###sec-faces" };
+		constexpr const char* kSectionTitles[] = { "Sliders", "Look", "Race & Sex", "Race Faces" };
+		constexpr const char* kSectionRects[] = { "sec:sliders", "sec:look", "sec:race", "sec:faces" };
+
+		void DrawCategories()
 		{
-			if (!IG::BeginTabBar("##lifecast-sections")) {
-				return;
-			}
-			constexpr const char* kNames[] = { "Sliders###sec-sliders", "Look###sec-look", "Race & Sex###sec-race",
-				"Race Faces###sec-faces" };
-			constexpr const char* kRects[] = { "sec:sliders", "sec:look", "sec:race", "sec:faces" };
+			auto* dl = IG::GetWindowDrawList();
 			for (int i = 0; i < 4; ++i) {
-				const bool open = IG::BeginTabItem(kNames[i]);
-				Rect(kRects[i]);
-				if (!open) {
-					continue;
+				if (i > 0) {
+					IG::SameLine(0.0f, Theme::Px(2.0f));
 				}
-				if (g_section != i) {
+				const bool on = g_section == i;
+				IG::PushStyleColor(IG::ImGuiCol_Text, on ? Theme::Color::Accent() : Theme::Color::TextDim());
+				IG::PushStyleColor(IG::ImGuiCol_ButtonHovered, IG::ImVec4{ 0.0f, 0.0f, 0.0f, 0.0f });
+				IG::PushStyleColor(IG::ImGuiCol_ButtonActive, IG::ImVec4{ 0.0f, 0.0f, 0.0f, 0.0f });
+				IG::PushStyleVar(IG::ImGuiStyleVar_FrameBorderSize, 0.0f);
+				IG::PushStyleVar(IG::ImGuiStyleVar_FramePadding, IG::ImVec2{ Theme::Px(10.0f), Theme::Px(7.0f) });
+				const bool hit = IG::Button(kSectionLabels[i]);
+				IG::PopStyleVar(2);
+				IG::PopStyleColor(3);
+				const auto a = IG::GetItemRectMin();
+				const auto b = IG::GetItemRectMax();
+				if (on) {
+					const float t = Theme::Px(2.0f);
+					IG::ImDrawListManager::AddRectFilled(dl, IG::ImVec2{ a.x, b.y - t }, IG::ImVec2{ b.x, b.y },
+						IG::ColorConvertFloat4ToU32(Theme::Color::Accent()), 0.0f, 0);
+				} else if (IG::IsItemHovered()) {
+					// .belt-cat:hover lights the word; ImGui has no per-item text hover colour, so a hairline marks it
+					IG::ImDrawListManager::AddRectFilled(dl, IG::ImVec2{ a.x, b.y - 1.0f }, IG::ImVec2{ b.x, b.y },
+						IG::ColorConvertFloat4ToU32(Theme::Color::Text()), 0.0f, 0);
+				}
+				Rect(kSectionRects[i]);
+				if (hit && g_section != i) {
 					g_section = i;
-					spdlog::info("[smf] view: section {}", kRects[i] + 4);
+					spdlog::info("[smf] view: section {}", kSectionRects[i] + 4);
 					Common::LayoutSoon();
 				}
-				switch (i) {
-				case 0:
-					DrawSliders();
-					break;
-				case 1:
-					Face::DrawLook();
-					break;
-				case 2:
-					Face::DrawRaceSex();
-					break;
-				default:
-					Face::DrawRacePresets();
-					break;
-				}
-				IG::EndTabItem();
 			}
-			IG::EndTabBar();
+		}
+
+		void DrawSection()
+		{
+			switch (g_section) {
+			case 0:
+				DrawSliders();
+				break;
+			case 1:
+				Face::DrawLook();
+				break;
+			case 2:
+				Face::DrawRaceSex();
+				break;
+			default:
+				Face::DrawRacePresets();
+				break;
+			}
 		}
 
 		// The stage under the "all" form: a drag or the wheel outside the
@@ -501,19 +585,39 @@ namespace Lifecast::Panel::Smf
 			}
 		}
 
-		// Where the character view is: the screen left of the panel.
-		void StageFrame(IG::ImGuiIO* a_io, const Frame& a_f)
+		// Where the character view is: the stage, beside the small panel and
+		// over the belt (stage.js's frame), in shares of the screen's width.
+		void StageFrame(IG::ImGuiIO* a_io, float a_left, float a_right)
 		{
-			if (a_io->DisplaySize.x <= 0.0f) {
+			const float dw = a_io->DisplaySize.x;
+			if (dw <= 0.0f) {
 				return;
 			}
-			const float right = (std::clamp)(a_f.x / a_io->DisplaySize.x, 0.1f, 1.0f);
-			if (g_frameRight >= 0.0f && std::abs(right - g_frameRight) < 0.002f) {
+			const float left = (std::clamp)(a_left / dw, 0.0f, 0.9f);
+			const float right = (std::clamp)(a_right / dw, left + 0.1f, 1.0f);
+			if (g_frameRight >= 0.0f && std::abs(right - g_frameRight) < 0.002f && std::abs(left - g_frameLeft) < 0.002f) {
 				return;
 			}
+			g_frameLeft = left;
 			g_frameRight = right;
-			Send("stage-frame", { { "on", true }, { "left", 0.0 }, { "right", right } });
+			Send("stage-frame", { { "on", true }, { "left", left }, { "right", right } });
 		}
+
+		std::string BoxText(const Box& a_b)
+		{
+			return fmt::format("{} {:.0f},{:.0f},{:.0f},{:.0f}", a_b.name, a_b.x0, a_b.y0, a_b.x1, a_b.y1);
+		}
+
+		Box WindowBox(const char* a_name)
+		{
+			const auto pos = IG::GetWindowPos();
+			const auto size = IG::GetWindowSize();
+			return Box{ a_name, pos.x, pos.y, pos.x + size.x, pos.y + size.y };
+		}
+
+		constexpr IG::ImGuiWindowFlags kFixed = IG::ImGuiWindowFlags_NoTitleBar | IG::ImGuiWindowFlags_NoResize |
+		                                        IG::ImGuiWindowFlags_NoMove | IG::ImGuiWindowFlags_NoCollapse |
+		                                        IG::ImGuiWindowFlags_NoSavedSettings;
 	}
 
 	namespace Common
@@ -576,9 +680,20 @@ namespace Lifecast::Panel::Smf
 				spdlog::info("[smf] view: input form {}", hybrid ? "hybrid" : "all");
 			}
 			g_hybrid = hybrid;
+			// The page's own size (--panel-scale, 0.8 to 2.5); 1 when the settings do not carry it.
+			const auto  sc = data.find("panelScale");
+			const float scale = sc != data.end() && sc->is_number() ? sc->get<float>() : 1.0f;
+			if (std::abs(scale - Theme::Scale()) > 0.001f || !g_scaleHeard) {
+				g_scaleHeard = true;
+				Theme::SetScale(scale);
+				spdlog::info("[smf] view: panel scale {:.2f} (settings: {})", Theme::Scale(),
+					sc != data.end() ? sc->dump() : std::string("no panelScale"));
+				Common::LayoutSoon();
+			}
 		} else if (type == "visibility") {
 			const bool v = data.value("visible", false);
 			if (v && !g_visible) {
+				g_frameLeft = -1.0f;
 				g_frameRight = -1.0f;
 				AskAll();
 			}
@@ -640,49 +755,129 @@ namespace Lifecast::Panel::Smf
 			return f;
 		}
 
+		// The frame of the web panel (D119, panel.css): the belt along the
+		// bottom, the small panel over its first column, the stage in the rest
+		// of the screen with its bar at the bottom. Fixed windows - no title,
+		// no moving, no resizing - and the screen between them is the game's.
 		const float dw = io->DisplaySize.x;
 		const float dh = io->DisplaySize.y;
-		const float w = (std::max)(440.0f, dw * 0.30f);
-		IG::SetNextWindowPos(IG::ImVec2{ dw - w - 24.0f, 24.0f }, IG::ImGuiCond_Appearing);
-		IG::SetNextWindowSize(IG::ImVec2{ w, dh - 48.0f }, IG::ImGuiCond_Appearing);
-		IG::Begin("Lifecast###lifecast-smf", nullptr, IG::ImGuiWindowFlags_NoCollapse | IG::ImGuiWindowFlags_NoSavedSettings);
-		const auto pos = IG::GetWindowPos();
-		const auto size = IG::GetWindowSize();
-		f.x = pos.x;
-		f.y = pos.y;
-		f.w = size.x;
-		f.h = size.y;
+		const float gap = Theme::Px(8.0f);                                // --gap
+		const float beltH = Theme::Px(48.0f);                             // --belt-height
+		const float col = (std::min)(Theme::Px(430.0f), dw * 0.34f);      // --panel-col
+		const float panelH = (std::min)(dh * 0.64f, dh - beltH - gap);    // --panel-tall, the panel always open
+		const float beltY = dh - beltH;
+		const float stageL = col + 2.0f * gap;
+		const float stageT = 2.0f * gap;
+		const float stageR = dw - 2.0f * gap;
+		const float stageB = beltY - 2.0f * gap;
+		const auto  border = IG::ColorConvertFloat4ToU32(Theme::Color::PanelBorder());
 		g_layout.clear();
-		g_clipBottom = pos.y + size.y;
 
-		IG::Text("Lifecast %s", g_dll.c_str());
-		IG::SameLine();
-		IG::TextDisabled("- SKSE Menu Framework");
-		if (g_helloed && !g_compatible) {
-			IG::TextUnformatted("This view and the DLL speak different protocol versions.");
+		// The stage: a frame only (.stage), on the background list - under every window.
+		IG::ImDrawListManager::AddRect(IG::GetBackgroundDrawList(), IG::ImVec2{ stageL, stageT }, IG::ImVec2{ stageR, stageB },
+			IG::ColorConvertFloat4ToU32(Theme::Color::StageBorder()), 6.0f, 0, 1.0f);
+
+		// The small panel.
+		{
+			const Theme::Scope theme(Theme::Kind::kPanel);
+			IG::SetNextWindowPos(IG::ImVec2{ 0.0f, beltY - panelH }, IG::ImGuiCond_Always);
+			IG::SetNextWindowSize(IG::ImVec2{ col, panelH }, IG::ImGuiCond_Always);
+			IG::Begin("##lifecast-panel", nullptr, kFixed | IG::ImGuiWindowFlags_NoScrollbar | IG::ImGuiWindowFlags_NoScrollWithMouse);
+			Theme::Body();
+			Theme::LogWindow(Theme::Kind::kPanel);
+			f.boxes[f.count++] = WindowBox("panel");
+			g_clipBottom = f.boxes[0].y1;
+			auto* dl = IG::GetWindowDrawList();
+			const auto& b = f.boxes[0];
+			// .belt-panel: border on top and on the right
+			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ b.x0, b.y0 + 0.5f }, IG::ImVec2{ b.x1, b.y0 + 0.5f }, border, 1.0f);
+			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ b.x1 - 0.5f, b.y0 }, IG::ImVec2{ b.x1 - 0.5f, b.y1 }, border, 1.0f);
+
+			Theme::SectionTitle(kSectionTitles[g_section]);
+			if (g_helloed && !g_compatible) {
+				IG::TextColored(Theme::Color::Bad(), "This view and the DLL speak different protocol versions.");
+			}
+			if (g_section == 0) {
+				DrawSlidersHead();
+			}
+			IG::Separator();
+			DrawSection();
+			IG::End();
 		}
-		// The input form, while both are being measured (1.6 E2). "Hybrid"
-		// hands the input to whoever the cursor is over (D291).
-		const bool hybrid = g_hybrid;
-		IG::TextUnformatted("Input:");
-		IG::SameLine();
-		if (IG::RadioButton("All##input", !hybrid) && hybrid) {
-			Send("settings-set", { { "key", "smfInput" }, { "value", "all" } });
+
+		// The belt: header (the title, as wide as the panel), the categories,
+		// room for the actions E6 brings, the footer.
+		{
+			const Theme::Scope theme(Theme::Kind::kBelt);
+			IG::SetNextWindowPos(IG::ImVec2{ 0.0f, beltY }, IG::ImGuiCond_Always);
+			IG::SetNextWindowSize(IG::ImVec2{ dw, beltH }, IG::ImGuiCond_Always);
+			IG::Begin("##lifecast-belt", nullptr, kFixed | IG::ImGuiWindowFlags_NoScrollbar | IG::ImGuiWindowFlags_NoScrollWithMouse);
+			Theme::Body(13.0f);  // .belt-cat
+			Theme::LogWindow(Theme::Kind::kBelt);
+			f.boxes[f.count++] = WindowBox("belt");
+			const auto& b = f.boxes[f.count - 1];
+			g_clipBottom = b.y1;
+			auto* dl = IG::GetWindowDrawList();
+			const float pad = gap * 1.5f;
+			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ b.x0, b.y0 + 0.5f }, IG::ImVec2{ b.x1, b.y0 + 0.5f }, border, 1.0f);
+			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ col - 0.5f, b.y0 }, IG::ImVec2{ col - 0.5f, b.y1 }, border, 1.0f);
+
+			// .panel-header: the title
+			IG::SetCursorScreenPos(IG::ImVec2{ pad, beltY + (beltH - Theme::Px(22.0f)) * 0.5f });
+			Theme::Title("Lifecast");
+
+			// .belt-cats
+			const float rowY = beltY + (beltH - IG::GetFrameHeight()) * 0.5f;
+			IG::SetCursorScreenPos(IG::ImVec2{ col + pad, rowY });
+			DrawCategories();
+			const float catsEnd = IG::GetItemRectMax().x + pad;
+			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ catsEnd - 0.5f, b.y0 }, IG::ImVec2{ catsEnd - 0.5f, b.y1 }, border, 1.0f);
+
+			// .panel-footer: the input form (D291) and the way back to RaceMenu.
+			const auto* style = IG::GetStyle();
+			const float radio = IG::GetFrameHeight() + style->ItemInnerSpacing.x;
+			const float footW = IG::CalcTextSize("Input").x + radio * 2.0f + IG::CalcTextSize("All").x +
+			                    IG::CalcTextSize("Hybrid").x + IG::CalcTextSize("F4  RaceMenu").x + style->ItemSpacing.x * 4.0f;
+			const float footX = dw - footW - pad;
+			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ footX - pad + 0.5f, b.y0 }, IG::ImVec2{ footX - pad + 0.5f, b.y1 }, border,
+				1.0f);
+			IG::SetCursorScreenPos(IG::ImVec2{ footX, rowY });
+			const bool hybrid = g_hybrid;
+			IG::AlignTextToFramePadding();
+			IG::TextDisabled("Input");
+			IG::SameLine();
+			if (IG::RadioButton("All##input", !hybrid) && hybrid) {
+				Send("settings-set", { { "key", "smfInput" }, { "value", "all" } });
+			}
+			Rect("input-all");
+			IG::SameLine();
+			if (IG::RadioButton("Hybrid##input", hybrid) && !hybrid) {
+				Send("settings-set", { { "key", "smfInput" }, { "value", "hybrid" } });
+			}
+			Rect("input-hybrid");
+			IG::SameLine();
+			IG::TextDisabled("F4  RaceMenu");
+			IG::End();
 		}
-		Rect("input-all");
-		IG::SameLine();
-		if (IG::RadioButton("Hybrid##input", hybrid) && !hybrid) {
-			Send("settings-set", { { "key", "smfInput" }, { "value", "hybrid" } });
+
+		// The stage bar (.stage-bar): centred at the bottom of the stage.
+		{
+			const Theme::Scope theme(Theme::Kind::kStageBar);
+			IG::SetNextWindowPos(IG::ImVec2{ (stageL + stageR) * 0.5f, stageB - gap }, IG::ImGuiCond_Always,
+				IG::ImVec2{ 0.5f, 1.0f });
+			IG::Begin("##lifecast-stagebar", nullptr, kFixed | IG::ImGuiWindowFlags_AlwaysAutoResize | IG::ImGuiWindowFlags_NoScrollbar);
+			Theme::Body(12.0f);  // .panel-button
+			Theme::LogWindow(Theme::Kind::kStageBar);
+			f.boxes[f.count++] = WindowBox("stagebar");
+			g_clipBottom = f.boxes[f.count - 1].y1;
+			DrawStage();
+			IG::End();
 		}
-		Rect("input-hybrid");
-		IG::Separator();
-		DrawStage();
-		IG::Separator();
-		DrawSections();
+
 		f.wantText = io->WantTextInput;
 		f.drawn = true;
-		IG::End();
-		g_lastLayout = fmt::format("window {:.0f},{:.0f},{:.0f},{:.0f}", f.x, f.y, f.x + f.w, f.y + f.h);
+		g_lastLayout = fmt::format("window {:.0f},{:.0f},{:.0f},{:.0f}; {}; {}; stage {:.0f},{:.0f},{:.0f},{:.0f}", f.boxes[0].x0,
+			f.boxes[0].y0, f.boxes[0].x1, f.boxes[0].y1, BoxText(f.boxes[1]), BoxText(f.boxes[2]), stageL, stageT, stageR, stageB);
 		for (const auto& e : g_layout) {
 			g_lastLayout += "; " + e;
 		}
@@ -691,7 +886,7 @@ namespace Lifecast::Panel::Smf
 		}
 
 		StageInput(io, a_holds);
-		StageFrame(io, f);
+		StageFrame(io, stageL, stageR);
 		if (g_needDrawn) {
 			SendDrawn();
 		}

@@ -10,21 +10,47 @@
 // 1.6 E2 draws one section whole - Sliders, a tab per RaceMenu category - and
 // the stage: turn and zoom, by the "stage-*" messages stage.js sends. 1.6 E3
 // adds Look, Race & Sex and the race's preset faces (Face.h), each a tab.
+// 1.6 E4 gives it the web panel's look and frame (Theme.h, D119): a small
+// panel over a belt along the bottom, and a bar over the stage - three
+// windows, and the screen between them is the game's.
 
 #pragma once
 
 namespace Lifecast::Panel::Smf
 {
-	// What the window drew this frame: where the panel is (screen pixels) and
-	// whether a field wants the keyboard. Read by the input form.
+	// One of the view's windows on screen, in screen pixels.
+	struct Box
+	{
+		const char* name = "";
+		float       x0 = 0.0f;
+		float       y0 = 0.0f;
+		float       x1 = 0.0f;
+		float       y1 = 0.0f;
+	};
+
+	// What the view drew this frame: its windows (the small panel, the belt,
+	// the stage bar) and whether a field wants the keyboard. Read by the
+	// input form, for which "inside" is inside any of the windows.
 	struct Frame
 	{
-		float x = 0.0f;
-		float y = 0.0f;
-		float w = 0.0f;
-		float h = 0.0f;
-		bool  drawn = false;
-		bool  wantText = false;
+		static constexpr int kMaxBoxes = 3;
+
+		Box  boxes[kMaxBoxes];
+		int  count = 0;
+		bool drawn = false;
+		bool wantText = false;
+
+		// The window the point is in, or nullptr when it is in none.
+		const Box* At(float a_x, float a_y) const
+		{
+			for (int i = 0; i < count; ++i) {
+				const auto& b = boxes[i];
+				if (a_x >= b.x0 && a_x < b.x1 && a_y >= b.y0 && a_y < b.y1) {
+					return &b;
+				}
+			}
+			return nullptr;
+		}
 	};
 
 	// DLL -> view: one bridge message, as JSON text. Game thread.

@@ -5,6 +5,7 @@
 
 #include "Panel/Smf/Common.h"
 #include "Panel/Smf/DeadKeys.h"
+#include "Panel/Smf/Theme.h"
 
 #include "SKSEMenuFramework/SKSEMenuFramework.h"
 
@@ -26,7 +27,7 @@ namespace Lifecast::Panel::Smf::Face
 		using Common::Send;
 
 		constexpr auto kSendEvery = std::chrono::milliseconds(50);
-		constexpr float kListHeight = 220.0f;
+		constexpr float kListHeight = 200.0f;  // CSS pixels
 
 		// ------------------------------------------------------------- Look
 
@@ -387,7 +388,8 @@ namespace Lifecast::Panel::Smf::Face
 				Common::LayoutSoon();
 			}
 			IG::TextDisabled("%d of %d", static_cast<int>(a_l.filtered.size()), static_cast<int>(a_l.items.size()));
-			IG::BeginChild("##items", IG::ImVec2{ 0.0f, kListHeight }, IG::ImGuiChildFlags_Border);
+			IG::BeginChild("##items", IG::ImVec2{ 0.0f, Theme::Px(kListHeight) }, IG::ImGuiChildFlags_Border);
+			Theme::Body();
 			auto* clip = IG::ImGuiListClipperManager::Create();
 			IG::ImGuiListClipperManager::Begin(clip, static_cast<int>(a_l.filtered.size()), -1.0f);
 			while (IG::ImGuiListClipperManager::Step(clip)) {
@@ -425,7 +427,7 @@ namespace Lifecast::Panel::Smf::Face
 					IG::PushStyleColor(IG::ImGuiCol_Border, IG::ImVec4{ 1.0f, 1.0f, 1.0f, 1.0f });
 				}
 				if (IG::ColorButton("##swatch", IG::ImVec4{ rgb[0], rgb[1], rgb[2], 1.0f },
-						current ? 0 : IG::ImGuiColorEditFlags_NoBorder, IG::ImVec2{ 22.0f, 22.0f })) {
+						current ? 0 : IG::ImGuiColorEditFlags_NoBorder, IG::ImVec2{ Theme::Px(18.0f), Theme::Px(18.0f) })) {
 					spdlog::info("[smf] view: hair colour swatch {} {}", i, a_l.swatches[i]);
 					a_l.index = i;
 					SendLook("hair-color", i, true);
@@ -439,12 +441,12 @@ namespace Lifecast::Panel::Smf::Face
 			float worn[3] = { 0.0f, 0.0f, 0.0f };
 			const bool hasWorn = ParseHex(a_l.color, worn);
 			IG::ColorButton("##worn", IG::ImVec4{ worn[0], worn[1], worn[2], hasWorn ? 1.0f : 0.0f }, 0,
-				IG::ImVec2{ 22.0f, 22.0f });
+				IG::ImVec2{ Theme::Px(18.0f), Theme::Px(18.0f) });
 			IG::SameLine();
 			IG::TextUnformatted(a_l.index < 0 ? (a_l.color.empty() ? "--" : a_l.color.c_str()) :
 			                                    fmt::format("{} / {}", a_l.index, a_l.count - 1).c_str());
 			IG::SameLine();
-			IG::SetNextItemWidth(110.0f);
+			IG::SetNextItemWidth(Theme::Px(70.0f));
 			if (IG::InputTextWithHint("##hex", "RRGGBB", g_hairHex, sizeof(g_hairHex),
 					IG::ImGuiInputTextFlags_CharsHexadecimal | IG::ImGuiInputTextFlags_EnterReturnsTrue |
 						IG::ImGuiInputTextFlags_AutoSelectAll)) {
@@ -517,8 +519,9 @@ namespace Lifecast::Panel::Smf::Face
 			return;
 		}
 		IG::BeginChild("##look");
+		Theme::Body();
 		if (g_weight.present) {
-			IG::TextUnformatted("Weight");
+			Theme::Group("Weight");
 			IG::SetNextItemWidth(-1.0f);
 			float v = g_weight.v;
 			if (IG::SliderFloat("##weight", &v, g_weight.min, g_weight.max, "%.0f")) {
@@ -545,7 +548,7 @@ namespace Lifecast::Panel::Smf::Face
 			if (!l.present || l.count == 0) {
 				continue;
 			}
-			IG::TextUnformatted(r.label);
+			Theme::Group(r.label);
 			if (!l.name.empty() && l.index >= 0) {
 				IG::SameLine();
 				IG::TextDisabled("%s%s%s", l.name.c_str(), l.source.empty() ? "" : "  -  ", l.source.c_str());
@@ -570,7 +573,7 @@ namespace Lifecast::Panel::Smf::Face
 			return;
 		}
 		const bool busy = !g_rsPending.empty();
-		IG::TextUnformatted("Sex");
+		Theme::Group("Sex");
 		for (int f = 0; f < 2; ++f) {
 			IG::SameLine();
 			const bool current = g_female == f;
@@ -584,8 +587,9 @@ namespace Lifecast::Panel::Smf::Face
 		}
 		IG::TextDisabled("%s", g_rsStatus.c_str());
 		IG::Separator();
-		IG::TextUnformatted("Race");
+		Theme::Group("Race");
 		IG::BeginChild("##races");
+		Theme::Body();
 		for (int i = 0; i < static_cast<int>(g_races.size()); ++i) {
 			IG::PushID(i);
 			if (IG::Selectable(g_races[i].name.c_str(), i == g_race) && i != g_race && !busy) {
@@ -630,6 +634,7 @@ namespace Lifecast::Panel::Smf::Face
 		IG::Text("Preset %d / %d", g_rpAt + 1, g_rpCount);
 		IG::TextDisabled("%s", g_rpStatus.c_str());
 		IG::BeginChild("##rp");
+		Theme::Body();
 		for (int i = 0; i < g_rpCount; ++i) {
 			IG::PushID(i);
 			const auto label = fmt::format("Preset {}", i + 1);
