@@ -25,7 +25,8 @@ namespace Lifecast::Panel::Smf::Face
 	void Sent(std::string_view a_type);
 
 	void DrawLook();
-	void DrawRaceSex();
+	// a_below: the height the section keeps under the race list.
+	void DrawRaceSex(float a_below = 0.0f);
 	void DrawRacePresets();
 
 	// One line with these sections' state, for the backend's LogState.

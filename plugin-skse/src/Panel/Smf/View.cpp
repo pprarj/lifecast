@@ -64,6 +64,19 @@ namespace Lifecast::Panel::Smf
 			bool        active = false;
 			float       before = 0.0f;  // the value when the hand took the slider (History)
 			char        typed[24] = {};
+			// The first number the row ever received is its baseline, as a
+			// row of the page keeps it (controls.js, V079): "changed" is the
+			// value now against it.
+			bool        hasInitial = false;
+			float       initial = 0.0f;
+		};
+
+		// One row of "In RaceMenu" (delegate.js): a handover to RaceMenu.
+		struct Door
+		{
+			std::string key;  // what "show-racemenu" carries as "for"
+			std::string label;
+			std::string note;
 		};
 
 		struct Tab
@@ -136,6 +149,10 @@ namespace Lifecast::Panel::Smf
 		bool                                      g_inPopup = false;
 		std::uint32_t                             g_received = 0;
 		std::uint32_t                             g_ignored = 0;
+		std::vector<Door>                         g_doors;            // "In RaceMenu": the fixed rows, then the live ones
+		Clock::time_point                         g_helloAskedAt{};   // when the view said hello (the bridge's status)
+		int                                       g_cardFrames = 0;   // frames the card has been drawn since it came on
+		float                                     g_scaleShown = 1.0f;  // the scale the settings last carried
 
 		// The look is asked when the view comes on screen, as the page asks it
 		// when it attaches (look.js). On a new game the view is there before
@@ -158,6 +175,8 @@ namespace Lifecast::Panel::Smf
 
 		// Render-only.
 		char              g_search[128] = {};
+		bool              g_changedOnly = false;  // the "Changed" filter (search.js)
+		std::string       g_counterFor = "\x01";  // what the counter line last logged
 		Drag              g_drag = Drag::kNone;
 		int               g_dragButton = 0;
 		bool              g_dragFromGame = false;
@@ -252,7 +271,16 @@ namespace Lifecast::Panel::Smf
 			a_s.has = a_v.is_number();
 			if (a_s.has) {
 				a_s.v = a_v.get<float>();
+				if (!a_s.hasInitial) {
+					a_s.hasInitial = true;
+					a_s.initial = a_s.v;
+				}
 			}
+		}
+
+		bool Changed(const Slider& a_s)
+		{
+			return a_s.has && a_s.hasInitial && std::abs(a_s.v - a_s.initial) > 1e-6f;
 		}
 
 		void OnSliders(const json& a_data)
@@ -285,6 +313,16 @@ namespace Lifecast::Panel::Smf
 			}
 			g_signature = std::move(sig);
 
+			// A rebuilt list keeps each row's baseline: it is the first number
+			// the row ever received, and a new list of the same sliders is not
+			// a new first number.
+			std::unordered_map<std::string, float> baselines;
+			for (const auto& s : g_sliders) {
+				if (s.hasInitial) {
+					baselines[s.k] = s.initial;
+				}
+			}
+
 			g_tabs.clear();
 			g_tabs.push_back({ "", "General", "", 0, -1, {} });
 			for (const auto& t : tabs) {
@@ -311,6 +349,10 @@ namespace Lifecast::Panel::Smf
 				if (row.max <= row.min) {
 					row.max = row.min + 1.0f;
 				}
+				if (const auto b = baselines.find(row.k); b != baselines.end()) {
+					row.hasInitial = true;
+					row.initial = b->second;
+				}
 				if (s.contains("value")) {
 					SetValue(row, s["value"]);
 				}
@@ -336,6 +378,66 @@ namespace Lifecast::Panel::Smf
 			}
 			g_needDrawn = true;
 			spdlog::info("[smf] view: {} sliders in {} tabs", g_sliders.size(), g_tabs.size());
+		}
+
+		// "In RaceMenu" (delegate.js): the fixed rows (D027), then a door for
+		// every live category this build does not cover. Matched by label and
+		// never by flag, as the page does (D082): a label that moves becomes a
+		// door, never a duplicate. A keyed category has a tab of its own in
+		// Sliders, so it gets no door.
+		constexpr const char* kCovered[] = { "$ALL", "RACE", "BODY", "HEAD", "FACE", "EYES", "BROW", "MOUTH", "HAIR", "$EXTRA",
+			"$EXPRESSIONS", "$COLORS", "$MAKEUP", "$BODY PAINT", "$HAND PAINT", "$FOOT PAINT", "$FACE PAINT", "$BODY SCALES" };
+
+		void BuildDoors()
+		{
+			std::vector<Door> doors{ { "sculpt", "Sculpt", "Free-form editing of the head mesh." } };
+			for (const auto& e : g_categories) {
+				if (!e.is_object()) {
+					continue;
+				}
+				const auto text = e.value("text", std::string());
+				const auto key = e.value("key", std::string());
+				if (text.empty() || !key.empty() ||
+					std::find(std::begin(kCovered), std::end(kCovered), text) != std::end(kCovered)) {
+					continue;
+				}
+				doors.push_back({ "category:" + text, text, "RaceMenu has this tab; the Lifecast does not build it." });
+			}
+			std::string list;
+			for (const auto& d : doors) {
+				list += (list.empty() ? "" : ", ") + d.key;
+			}
+			std::string before;
+			for (const auto& d : g_doors) {
+				before += (before.empty() ? "" : ", ") + d.key;
+			}
+			g_doors = std::move(doors);
+			if (list != before) {
+				spdlog::info("[smf] view: in-racemenu {} door(s) from {} categories: {}", g_doors.size(), g_categories.size(),
+					list);
+				Common::LayoutSoon();
+			}
+		}
+
+		// stage.js: LAlt swaps far and near in standard, at most once in 400 ms.
+		// Two sources in the view (D318): the game's input while the hybrid
+		// owner is the game (SmfBackend's sink, as "key-lalt"), and ImGui while
+		// the window holds the input. A press both hear is one swap.
+		void LeftAlt(const char* a_from)
+		{
+			const auto now = Clock::now();
+			const char* what = "ignored (the stage is not ready)";
+			if (g_stage.ready && g_stage.free) {
+				what = "ignored (free mode)";
+			} else if (g_stage.ready && now - g_laltZoomAt < std::chrono::milliseconds(400)) {
+				what = "ignored (within 400 ms of the last)";
+			} else if (g_stage.ready) {
+				g_laltZoomAt = now;
+				Send("stage-zoom", { { "from", "dll-lalt" } });
+				++g_zooms;
+				what = "stage-zoom";
+			}
+			spdlog::info("[smf] view: LAlt from {} - {}", a_from, what);
 		}
 
 		void SendDrawn()
@@ -381,7 +483,12 @@ namespace Lifecast::Panel::Smf
 			Send("look-get");
 		}
 
-		void DrawCard(IG::ImGuiIO* a_io)
+		// The card for the way back (card.js): text only, no input - the window
+		// takes none (NoInputs) and the backend gives the input up while the
+		// card is on (Panel::ShowCard), so the keyboard and the mouse stay with
+		// RaceMenu. It answers "card-state" with what it drew, as the page does
+		// from its DOM, on the second frame (the first has no size yet).
+		void DrawCard(IG::ImGuiIO* a_io, bool a_holds)
 		{
 			const Theme::Scope theme(Theme::Kind::kCard);
 			IG::SetNextWindowPos(IG::ImVec2{ a_io->DisplaySize.x * 0.5f, Theme::Px(24.0f) }, IG::ImGuiCond_Always,
@@ -391,9 +498,21 @@ namespace Lifecast::Panel::Smf
 					IG::ImGuiWindowFlags_NoSavedSettings | IG::ImGuiWindowFlags_NoFocusOnAppearing);
 			Theme::Body();
 			Theme::LogWindow(Theme::Kind::kCard);
-			IG::TextColored(Theme::Color::Accent(), "Lifecast");
+			IG::TextUnformatted("Press");
 			IG::SameLine();
-			IG::Text("- %s brings the panel back", g_cardKey.c_str());
+			IG::TextColored(Theme::Color::Accent(), "%s", g_cardKey.c_str());
+			IG::SameLine();
+			IG::TextUnformatted("to return to Lifecast");
+			if (++g_cardFrames == 2) {
+				const auto pos = IG::GetWindowPos();
+				const auto size = IG::GetWindowSize();
+				const auto text = fmt::format("Press {} to return to Lifecast", g_cardKey);
+				Send("card-state", { { "on", true }, { "from", "smf-view" }, { "text", text }, { "holds", a_holds },
+									   { "rect", { std::lround(pos.x), std::lround(pos.y), std::lround(size.x), std::lround(size.y) } },
+									   { "viewport", { std::lround(a_io->DisplaySize.x), std::lround(a_io->DisplaySize.y) } } });
+				spdlog::info("[smf] view: card drawn at {:.0f},{:.0f} {:.0f}x{:.0f} '{}' - the window holds the input: {}", pos.x,
+					pos.y, size.x, size.y, text, a_holds);
+			}
 			IG::End();
 		}
 
@@ -637,20 +756,79 @@ namespace Lifecast::Panel::Smf
 			return hit;
 		}
 
-		// The head of Sliders: the search over the RaceMenu categories, as
-		// chips that wrap.
+		bool Shows(const Slider& a_s, const std::string& a_find)
+		{
+			return (a_find.empty() || a_s.lower.find(a_find) != std::string::npos) && (!g_changedOnly || Changed(a_s));
+		}
+
+		// The counter (search.js): "N changed of M" with the filter on, "M of T
+		// sliders" with a search, "T sliders in S sections" otherwise. It counts
+		// the rows of Sliders, which is where the view's search and filter
+		// look (D312). Logged once per change, with the rows a filter shows.
+		std::string Counter(const std::string& a_find)
+		{
+			std::size_t total = 0;
+			std::size_t sections = 0;
+			std::size_t matched = 0;
+			std::size_t changedMatched = 0;
+			std::string shown;
+			std::size_t named = 0;
+			for (const auto& t : g_tabs) {
+				if (t.rows.empty()) {
+					continue;
+				}
+				++sections;
+				for (const auto i : t.rows) {
+					const auto& s = g_sliders[i];
+					++total;
+					if (!a_find.empty() && s.lower.find(a_find) == std::string::npos) {
+						continue;
+					}
+					++matched;
+					if (Changed(s)) {
+						++changedMatched;
+					}
+					if ((!a_find.empty() || g_changedOnly) && Shows(s, a_find) && named < 12) {
+						shown += fmt::format("{}'{}'", named++ ? ", " : "", s.label);
+					}
+				}
+			}
+			const auto text = g_changedOnly ? fmt::format("{} changed of {}", changedMatched, matched) :
+			                  !a_find.empty() ? fmt::format("{} of {} sliders", matched, total) :
+			                                    fmt::format("{} sliders in {} sections", total, sections);
+			if (const auto key = text + "|" + a_find + "|" + shown; key != g_counterFor) {
+				g_counterFor = key;
+				spdlog::info("[smf] view: sliders counter '{}' (search '{}', changed filter {}){}{}", text, a_find,
+					g_changedOnly ? "on" : "off", shown.empty() ? "" : " - rows shown: ", shown);
+			}
+			return text;
+		}
+
+		// The head of Sliders: the search and the "Changed" filter (D129's
+		// finder), the counter, and the RaceMenu categories as chips that wrap.
 		void DrawSlidersHead()
 		{
-			IG::SetNextItemWidth(-1.0f);
+			const auto* style = IG::GetStyle();
+			const float changedW = IG::CalcTextSize("Changed").x + style->FramePadding.x * 2.0f;
+			IG::SetNextItemWidth((std::max)(IG::GetContentRegionAvail().x - changedW - style->ItemSpacing.x, Theme::Px(60.0f)));
 			if (IG::InputTextWithHint("##search", "Search sliders", g_search, sizeof(g_search),
 					IG::ImGuiInputTextFlags_CallbackCharFilter, &DeadKeys::Filter)) {
 				spdlog::info("[smf] search field '{}' hex [{}]", g_search, Hex(g_search));
 			}
 			Rect("search");
+			IG::SameLine();
+			if (ChipDraw("Changed###filter-changed", g_changedOnly)) {
+				g_changedOnly = !g_changedOnly;
+				spdlog::info("[smf] view: changed filter {}", g_changedOnly ? "on" : "off");
+				Common::LayoutSoon();
+			}
+			Rect("filter-changed");
+			IG::SetItemTooltip("Only the sliders that moved since the editor first read them");
 			if (!g_slidersReady) {
 				return;
 			}
-			const auto* style = IG::GetStyle();
+			IG::TextDisabled("%s", Counter(Lower(g_search)).c_str());
+			Rect("row-counter");
 			const float right = IG::GetCursorScreenPos().x + IG::GetContentRegionAvail().x;
 			bool        first = true;
 			for (auto& t : g_tabs) {
@@ -690,13 +868,14 @@ namespace Lifecast::Panel::Smf
 			Theme::Body();
 			for (auto& t : g_tabs) {
 				const auto id = t.id.empty() ? std::string("general") : t.id;
-				// A search looks through every category, as the page's does.
-				if (find.empty() && id != g_tab) {
+				// A search or the filter looks through every category, as the
+				// page's do.
+				if (find.empty() && !g_changedOnly && id != g_tab) {
 					continue;
 				}
 				for (const auto i : t.rows) {
 					auto& s = g_sliders[i];
-					if (!find.empty() && s.lower.find(find) == std::string::npos) {
+					if (!Shows(s, find)) {
 						continue;
 					}
 					DrawRow(s);
@@ -709,12 +888,29 @@ namespace Lifecast::Panel::Smf
 		// panel shows the one that is on.
 		constexpr const char* kSectionLabels[] = { "SLIDERS###sec-sliders", "LOOK###sec-look", "RACE & SEX###sec-race",
 			"RACE FACES###sec-faces", "SKIN & TINTS###sec-tints", "PAINT###sec-paint", "OBODY###sec-obody", "PRESETS###sec-presets" };
+		// Settings (D132) is a section of the small panel too, opened from the
+		// footer's button and not from the belt: kSections are the belt's.
 		constexpr const char* kSectionTitles[] = { "Sliders", "Look", "Race & Sex", "Race Faces", "Skin & Tints", "Paint",
-			"OBody", "Presets" };
+			"OBody", "Presets", "Settings" };
 		constexpr const char* kSectionRects[] = { "sec:sliders", "sec:look", "sec:race", "sec:faces", "sec:tints",
-			"sec:paint", "sec:obody", "sec:presets" };
+			"sec:paint", "sec:obody", "sec:presets", "sec:settings" };
 		constexpr int kSections = 8;
 		constexpr int kSectionBody = 6;
+		constexpr int kSectionPresets = 7;
+		constexpr int kSectionSettings = 8;
+
+		// The panel's size (panel.js): the bounds are a guard, the step the
+		// page's.
+		constexpr float kScaleMin = 0.8f;
+		constexpr float kScaleMax = 2.5f;
+		constexpr float kScaleStep = 0.1f;
+
+		void OpenSection(int a_i, const char* a_from)
+		{
+			spdlog::info("[smf] view: section {} ({}){}", kSectionRects[a_i] + 4, a_from, g_section == a_i ? ", already open" : "");
+			g_section = a_i;
+			Common::LayoutSoon();
+		}
 
 		// The OBody section is there only while OBody answers with presets
 		// (body.js); leaving it on when it goes falls back to the first one.
@@ -766,6 +962,141 @@ namespace Lifecast::Panel::Smf
 			}
 		}
 
+		// The always-visible buttons after the categories (belt.js QUICK, D126):
+		// Presets and OBody open their section from anywhere, Sculpt hands over
+		// to RaceMenu. OBody only while its section exists (D007).
+		void DrawQuick()
+		{
+			struct Quick
+			{
+				const char* label;
+				const char* rect;
+				int         section;
+				const char* send;
+				const char* tip;
+			};
+			static constexpr Quick kQuick[] = {
+				{ "Presets###quick-presets", "quick-presets", kSectionPresets, nullptr, nullptr },
+				{ "OBody###quick-obody", "quick-obody", kSectionBody, nullptr, nullptr },
+				{ "Sculpt###quick-sculpt", "quick-sculpt", -1, "sculpt", "Opens RaceMenu's Sculpt (F4 comes back)" },
+			};
+			IG::SameLine(0.0f, Theme::Px(10.0f));
+			IG::TextDisabled("|");  // .belt-sep
+			for (const auto& q : kQuick) {
+				if (q.section >= 0 && !SectionShown(q.section)) {
+					continue;
+				}
+				IG::SameLine(0.0f, Theme::Px(4.0f));
+				const bool hit = IG::Button(q.label);
+				Rect(q.rect);
+				if (q.tip) {
+					IG::SetItemTooltip("%s", q.tip);
+				}
+				if (!hit) {
+					continue;
+				}
+				if (q.send) {
+					spdlog::info("[smf] view: quick {} - show-racemenu for {}", q.rect + 6, q.send);
+					Send("show-racemenu", { { "for", q.send } });
+				} else {
+					OpenSection(q.section, "quick button");
+				}
+			}
+		}
+
+		// The height "In RaceMenu" takes under Race & Sex: its heading and two
+		// lines a door (the name with Open, the note).
+		float DelegateHeight()
+		{
+			const float n = static_cast<float>(g_doors.size());
+			return IG::GetTextLineHeightWithSpacing() * 2.0f +
+			       n * (IG::GetFrameHeightWithSpacing() + IG::GetTextLineHeightWithSpacing());
+		}
+
+		// "In RaceMenu" (delegate.js): one row a door, Open hands over to
+		// RaceMenu with the door's key (Switcher, RaceMenuTabs::Select). The web
+		// panel keeps it in the Race category, beside the race picker
+		// (groups.js), so here it is under Race & Sex.
+		void DrawDelegate()
+		{
+			IG::Separator();
+			Theme::Group("In RaceMenu");
+			const auto* style = IG::GetStyle();
+			const float openW = IG::CalcTextSize("Open").x + style->FramePadding.x * 2.0f;
+			for (const auto& d : g_doors) {
+				IG::PushID(d.key.c_str());
+				IG::AlignTextToFramePadding();
+				IG::TextUnformatted(d.label.c_str());
+				IG::SameLine((std::max)(IG::GetContentRegionMax().x - openW, IG::GetCursorPosX()));
+				if (IG::Button("Open")) {
+					spdlog::info("[smf] view: in-racemenu open {} - show-racemenu", d.key);
+					Send("show-racemenu", { { "for", d.key } });
+				}
+				Rect("door:" + d.key);
+				IG::SetItemTooltip("Opens RaceMenu (F4 comes back)");
+				IG::TextDisabled("%s", d.note.c_str());
+				IG::PopID();
+			}
+		}
+
+		// Settings (D132): Debug - the bridge and the versions (panel.js) - and
+		// the panel's size. A bridge in trouble also marks the footer's button
+		// (D133).
+		bool BridgeTrouble(std::string& a_text)
+		{
+			if (g_helloed) {
+				a_text = g_compatible ? "connected" : "version mismatch";
+				return !g_compatible;
+			}
+			if (Clock::now() - g_helloAskedAt > std::chrono::seconds(3)) {
+				a_text = "no answer";
+				return true;
+			}
+			a_text = "connecting";
+			return false;
+		}
+
+		void StepScale(int a_dir)
+		{
+			const float next = std::round((g_scaleShown + static_cast<float>(a_dir) * kScaleStep) / kScaleStep) * kScaleStep;
+			const float to = std::round((std::clamp)(next, kScaleMin, kScaleMax) * 100.0f) / 100.0f;
+			spdlog::info("[smf] view: panel scale asked {:.2f} -> {:.2f} (settings-set)", g_scaleShown, to);
+			Send("settings-set", { { "key", "panelScale" }, { "value", static_cast<double>(to) } });
+		}
+
+		void DrawSettings()
+		{
+			std::string status;
+			const bool  trouble = BridgeTrouble(status);
+			Theme::Group("Debug");
+			IG::TextDisabled("Bridge");
+			IG::SameLine();
+			IG::TextColored(trouble ? Theme::Color::Bad() : Theme::Color::Accent(), "%s", status.c_str());
+			Rect("bridge-status");
+			IG::TextDisabled("view %s / dll %s / protocol %u", Version::kString, g_dll.c_str(), static_cast<unsigned>(Bridge::kProtocolVersion));
+			Rect("versions");
+			IG::Separator();
+			Theme::Group("Panel size");
+			IG::BeginDisabled(g_scaleShown <= kScaleMin + 0.001f);
+			if (IG::Button("-###scale-down")) {
+				StepScale(-1);
+			}
+			Rect("scale-down");
+			IG::SetItemTooltip("Smaller");
+			IG::EndDisabled();
+			IG::SameLine();
+			IG::Text("%d%%", static_cast<int>(std::lround(g_scaleShown * 100.0f)));
+			Rect("scale-value");
+			IG::SameLine();
+			IG::BeginDisabled(g_scaleShown >= kScaleMax - 0.001f);
+			if (IG::Button("+###scale-up")) {
+				StepScale(1);
+			}
+			Rect("scale-up");
+			IG::SetItemTooltip("Bigger");
+			IG::EndDisabled();
+		}
+
 		void DrawSection()
 		{
 			switch (g_section) {
@@ -776,7 +1107,11 @@ namespace Lifecast::Panel::Smf
 				Face::DrawLook();
 				break;
 			case 2:
-				Face::DrawRaceSex();
+				Face::DrawRaceSex(DelegateHeight());
+				DrawDelegate();
+				break;
+			case kSectionSettings:
+				DrawSettings();
 				break;
 			case 3:
 				Face::DrawRacePresets();
@@ -1114,6 +1449,7 @@ namespace Lifecast::Panel::Smf
 			// The page's own size (--panel-scale, 0.8 to 2.5); 1 when the settings do not carry it.
 			const auto  sc = data.find("panelScale");
 			const float scale = sc != data.end() && sc->is_number() ? sc->get<float>() : 1.0f;
+			g_scaleShown = scale;
 			if (std::abs(scale - Theme::Scale()) > 0.001f || !g_scaleHeard) {
 				g_scaleHeard = true;
 				Theme::SetScale(scale);
@@ -1134,7 +1470,11 @@ namespace Lifecast::Panel::Smf
 			}
 			g_visible = v;
 		} else if (type == "card") {
-			g_card = data.value("on", false);
+			const bool on = data.value("on", false);
+			if (on && !g_card) {
+				g_cardFrames = 0;
+			}
+			g_card = on;
 			if (data.contains("key") && data["key"].is_string()) {
 				g_cardKey = data["key"].get<std::string>();
 			}
@@ -1156,6 +1496,7 @@ namespace Lifecast::Panel::Smf
 			if (data.value("ready", false) && data.contains("entries") && data["entries"].is_array()) {
 				g_categories = data["entries"];
 				ApplyOrder();
+				BuildDoors();
 				if (g_visible && g_categoriesSinceShown > 1) {
 					AskLookAfterFilm("RaceMenu categories", g_categories.size());
 				}
@@ -1196,13 +1537,7 @@ namespace Lifecast::Panel::Smf
 		} else if (type == "stage-visible") {
 			g_stageVisible = data.value("on", true);
 		} else if (type == "key-lalt") {
-			// stage.js: LAlt swaps far and near in standard, at most once in 400 ms
-			const auto now = Clock::now();
-			if (g_stage.ready && !g_stage.free && now - g_laltZoomAt >= std::chrono::milliseconds(400)) {
-				g_laltZoomAt = now;
-				Send("stage-zoom", { { "from", "dll-lalt" } });
-				++g_zooms;
-			}
+			LeftAlt("the game's input");
 		} else if (!Control::Receive(type, data) && !Face::Receive(type, data) && !Skin::Receive(type, data) &&
 				   !Presets::Receive(type, data)) {
 			++g_ignored;
@@ -1214,7 +1549,12 @@ namespace Lifecast::Panel::Smf
 
 	void Open()
 	{
-		Send("hello", { { "page", fmt::format("smf-view {}", Version::kString) }, { "protocol", Bridge::kProtocolVersion } });
+		{
+			std::lock_guard l(g_mx);
+			g_helloAskedAt = Clock::now();
+			BuildDoors();
+		}
+		Send("hello",{ { "page", fmt::format("smf-view {}", Version::kString) }, { "protocol", Bridge::kProtocolVersion } });
 		AskAll();
 		// Asked once, as the page does when it mounts: the DLL sends the list
 		// and the name again each time the panel comes on screen.
@@ -1231,8 +1571,29 @@ namespace Lifecast::Panel::Smf
 		}
 		std::lock_guard l(g_mx);
 		if (g_card) {
-			DrawCard(io);
+			// RaceMenu's film is in front and has the mouse: what the game's
+			// input heard meanwhile is RaceMenu's, not a drag for the stage.
+			g_gmDx = 0;
+			g_gmDy = 0;
+			g_gmDown = 0;
+			g_gmUp = 0;
+			g_gmWheel = 0;
+			if (g_drag != Drag::kNone) {
+				DragTick(true);
+			}
+			DrawCard(io, a_holds);
 			return f;
+		}
+		// The press, as an edge of the key or of the Alt modifier (the
+		// framework may feed only the modifier); AltGr is Ctrl + Alt and is
+		// not LAlt.
+		{
+			static bool s_alt = false;
+			const bool  alt = IG::IsKeyDown(IG::ImGuiKey_LeftAlt) || (io->KeyAlt && !io->KeyCtrl);
+			if (a_holds && alt && !s_alt) {
+				LeftAlt("ImGui");
+			}
+			s_alt = alt;
 		}
 		if (!g_visible) {
 			return f;
@@ -1316,14 +1677,18 @@ namespace Lifecast::Panel::Smf
 			const float rowY = beltY + (beltH - IG::GetFrameHeight()) * 0.5f;
 			IG::SetCursorScreenPos(IG::ImVec2{ col + pad, rowY });
 			DrawCategories();
+			DrawQuick();
 			const float catsEnd = IG::GetItemRectMax().x + pad;
 			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ catsEnd - 0.5f, b.y0 }, IG::ImVec2{ catsEnd - 0.5f, b.y1 }, border, 1.0f);
 
-			// .panel-footer: the input form (D291) and the way back to RaceMenu.
+			// .panel-footer: the input form (D291), Settings (D132) and the way
+			// back to RaceMenu.
 			const auto* style = IG::GetStyle();
 			const float radio = IG::GetFrameHeight() + style->ItemInnerSpacing.x;
+			const float settingsW = IG::CalcTextSize("Settings").x + style->FramePadding.x * 2.0f;
 			const float footW = IG::CalcTextSize("Input").x + radio * 2.0f + IG::CalcTextSize("All").x +
-			                    IG::CalcTextSize("Hybrid").x + IG::CalcTextSize("F4  RaceMenu").x + style->ItemSpacing.x * 4.0f;
+			                    IG::CalcTextSize("Hybrid").x + settingsW + IG::CalcTextSize("F4  RaceMenu").x +
+			                    style->ItemSpacing.x * 5.0f;
 			const float footX = dw - footW - pad;
 			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ footX - pad + 0.5f, b.y0 }, IG::ImVec2{ footX - pad + 0.5f, b.y1 }, border,
 				1.0f);
@@ -1344,6 +1709,21 @@ namespace Lifecast::Panel::Smf
 				Send("settings-set", { { "key", "smfInput" }, { "value", "hybrid" } });
 			}
 			Rect("input-hybrid");
+			IG::SameLine();
+			std::string bridge;
+			const bool  trouble = BridgeTrouble(bridge);
+			if (trouble) {
+				IG::PushStyleColor(IG::ImGuiCol_Text, Theme::Color::Bad());
+			}
+			const bool settingsHit = IG::Button("Settings###settings-button");
+			if (trouble) {
+				IG::PopStyleColor();
+				IG::SetItemTooltip("Bridge: %s", bridge.c_str());
+			}
+			Rect("settings-button");
+			if (settingsHit) {
+				OpenSection(kSectionSettings, "footer button");
+			}
 			IG::SameLine();
 			IG::TextDisabled("F4  RaceMenu");
 			IG::End();

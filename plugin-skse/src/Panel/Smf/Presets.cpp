@@ -824,6 +824,9 @@ namespace Lifecast::Panel::Smf::Presets
 		const bool empty = Trim(g_field).empty();
 		IG::BeginDisabled(empty);
 		const bool confirming = Clock::now() < g_confirmUntil;
+		// .preset-bar .preset-save: margin-left auto - Save at the right end of the row
+		const float saveW = IG::CalcTextSize(confirming ? "Overwrite?" : "Save").x + IG::GetStyle()->FramePadding.x * 2.0f;
+		IG::SetCursorPosX(IG::GetCursorPosX() + (std::max)(IG::GetContentRegionAvail().x - saveW, 0.0f));
 		if (IG::Button(confirming ? "Overwrite?###pr-save" : "Save###pr-save")) {
 			Save();
 		}
@@ -877,7 +880,12 @@ namespace Lifecast::Panel::Smf::Presets
 
 		DrawBoxes();
 
-		IG::BeginChild("##preset-list", IG::ImVec2{ 0.0f, 0.0f }, IG::ImGuiChildFlags_Border);
+		// The list is as tall as its rows, up to what the panel has left
+		// (panel.css .preset-list, alone in its region: max-height 46vh) - one
+		// row is one row high, not the whole panel.
+		const float listMax = (std::min)(IG::GetContentRegionAvail().y, IG::GetIO()->DisplaySize.y * 0.46f);
+		IG::SetNextWindowSizeConstraints(IG::ImVec2{ 0.0f, 0.0f }, IG::ImVec2{ 1.0e6f, (std::max)(listMax, IG::GetFrameHeight()) });
+		IG::BeginChild("##preset-list", IG::ImVec2{ 0.0f, 0.0f }, IG::ImGuiChildFlags_Border | IG::ImGuiChildFlags_AutoResizeY);
 		Theme::Body();
 		const float buttons = IG::CalcTextSize("i").x + IG::CalcTextSize("Loading").x + IG::GetStyle()->FramePadding.x * 4.0f +
 		                      IG::GetStyle()->ItemSpacing.x * 2.0f;
@@ -946,6 +954,7 @@ namespace Lifecast::Panel::Smf::Presets
 			IG::PopID();
 		}
 		IG::EndChild();
+		Rect("pr:list");
 	}
 
 	void DrawFinish(float a_width)

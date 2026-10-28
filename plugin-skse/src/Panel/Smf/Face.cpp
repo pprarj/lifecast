@@ -665,7 +665,7 @@ namespace Lifecast::Panel::Smf::Face
 		IG::EndChild();
 	}
 
-	void DrawRaceSex()
+	void DrawRaceSex(float a_below)
 	{
 		if (!g_raceReady) {
 			IG::TextDisabled("Race and sex: %s", g_rsStatus.c_str());
@@ -688,7 +688,8 @@ namespace Lifecast::Panel::Smf::Face
 		IG::TextDisabled("%s", g_rsStatus.c_str());
 		IG::Separator();
 		Theme::Group("Race");
-		IG::BeginChild("##races");
+		// a_below: what the section draws under the list (View's "In RaceMenu")
+		IG::BeginChild("##races", IG::ImVec2{ 0.0f, -a_below });
 		Theme::Body();
 		for (int i = 0; i < static_cast<int>(g_races.size()); ++i) {
 			IG::PushID(i);

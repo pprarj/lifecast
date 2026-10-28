@@ -3,6 +3,7 @@
 
 #include "Panel/SmfBackend.h"
 
+#include "Panel/Bridge.h"
 #include "Panel/Panel.h"
 #include "Panel/Smf/DeadKeys.h"
 #include "Panel/Smf/Theme.h"
@@ -246,6 +247,8 @@ namespace Lifecast::Panel
 		// What the game still receives: the chord when the window does not hold
 		// the input (the hybrid form, cursor away from the panel), and the
 		// tick that says the game's input is being dispatched at all.
+		constexpr std::uint32_t kLeftAlt = 0x38;  // DirectInput scan code, DIK_LMENU
+
 		class ChordSink final : public RE::BSTEventSink<RE::InputEvent*>
 		{
 		public:
@@ -273,6 +276,19 @@ namespace Lifecast::Panel
 						} else if (const auto* b = e->AsButtonEvent()) {
 							if (b->IsDown() || b->IsUp()) {
 								Smf::GameMouseButton(b->GetIDCode(), b->IsDown());
+							}
+						}
+					}
+				}
+				// D318: LAlt (stage.js's far/near swap) heard on the game's input
+				// under the hybrid form, handed to the view as Prisma's backend
+				// hands it to the page. The key goes on to RaceMenu.
+				if (a_event && g_visible && Smf::Hybrid() && !Smf::Card()) {
+					for (auto* e = *a_event; e; e = e->next) {
+						const auto* b = e->GetDevice() == RE::INPUT_DEVICES::kKeyboard ? e->AsButtonEvent() : nullptr;
+						if (b && b->GetIDCode() == kLeftAlt && b->IsDown()) {
+							if (auto* tasks = SKSE::GetTaskInterface()) {
+								tasks->AddTask([]() { Bridge::Send("key-lalt"); });
 							}
 						}
 					}
