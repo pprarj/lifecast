@@ -11,6 +11,7 @@
 
 #include "SKSEMenuFramework/SKSEMenuFramework.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 
@@ -152,6 +153,15 @@ namespace Lifecast::Panel
 				cy = a_io->MousePos.y;
 			} else {
 				MenuCursorAt(cx, cy);  // RaceMenu's cursor, while the game does
+				// RaceMenu's cursor stops ON the screen size (x = width, y =
+				// height), one past the last pixel, and the window boxes end
+				// there exclusively: a fast throw to the bottom edge stopped
+				// outside the belt and never flipped (D301). Bring it onto the
+				// screen first.
+				const float lastX = a_io->DisplaySize.x > 1.0f ? a_io->DisplaySize.x - 1.0f : 0.0f;
+				const float lastY = a_io->DisplaySize.y > 1.0f ? a_io->DisplaySize.y - 1.0f : 0.0f;
+				cx = std::clamp(cx, 0.0f, lastX);
+				cy = std::clamp(cy, 0.0f, lastY);
 			}
 			const Smf::Box* over = g_last.drawn ? g_last.At(cx, cy) : nullptr;
 			const bool      inside = over != nullptr;

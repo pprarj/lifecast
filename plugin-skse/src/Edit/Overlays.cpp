@@ -10,6 +10,9 @@
 #include "Edit/Tints.h"
 #include "Panel/Bridge.h"
 
+#include <algorithm>
+#include <string_view>
+
 namespace Lifecast::Edit::Overlays
 {
 	namespace
@@ -289,9 +292,23 @@ namespace Lifecast::Edit::Overlays
 			return a_texture.substr(start, end - start);
 		}
 
+		// The transparent texture of an unpainted layer comes back either as
+		// skee64.ini writes it or with the "textures\" root in front, in any
+		// case; either slash is accepted too (D302).
+		bool IsNoTexture(const std::string& a_texture)
+		{
+			constexpr std::string_view kRoot = "textures\\";
+			std::string                t = a_texture;
+			std::replace(t.begin(), t.end(), '/', '\\');
+			if (t.size() > kRoot.size() && _strnicmp(t.c_str(), kRoot.data(), kRoot.size()) == 0) {
+				t.erase(0, kRoot.size());
+			}
+			return _stricmp(t.c_str(), kNoTexture) == 0;
+		}
+
 		bool Painted(const std::string& a_texture)
 		{
-			return !a_texture.empty() && _stricmp(a_texture.c_str(), kNoTexture) != 0;
+			return !a_texture.empty() && !IsNoTexture(a_texture);
 		}
 
 		struct Paint
@@ -454,23 +471,30 @@ namespace Lifecast::Edit::Overlays
 			const bool female = IsFemale(player);
 			auto       areas = nlohmann::json::array();
 			std::string counts;
+			std::string emptyRead;
 			for (const auto& a : kAreas) {
 				const auto n = LayerCount(a);
-				counts += fmt::format("{}{} {}", counts.empty() ? "" : ", ", a.key, n);
 				if (n == 0) {
 					// The player has no layers of this kind - RaceMenu does
 					// not show the category either.
+					counts += fmt::format("{}{} 0", counts.empty() ? "" : ", ", a.key);
 					continue;
 				}
-				auto layers = nlohmann::json::array();
+				auto          layers = nlohmann::json::array();
+				std::uint32_t paintedCount = 0;
 				for (std::uint32_t i = 0; i < n; ++i) {
 					const auto  node = NodeName(a, i);
 					const Layer layer = ReadLayer(player, node, female);
 					const bool  painted = Painted(layer.texture);
+					paintedCount += painted ? 1 : 0;
+					if (!painted && emptyRead.empty()) {
+						emptyRead = fmt::format("{} layer {} '{}'", a.key, i, layer.texture);
+					}
 					layers.push_back({ { "i", i }, { "texture", painted ? layer.texture : "" },
 						{ "name", painted ? DisplayName(layer.texture) : "" }, { "color", Hex(layer.color) },
 						{ "alpha", layer.alpha }, { "glow", Hex(layer.glow) }, { "glowAlpha", layer.glowAlpha } });
 				}
+				counts += fmt::format("{}{} {} ({} painted)", counts.empty() ? "" : ", ", a.key, n, paintedCount);
 				auto        catalog = nlohmann::json::array();
 				std::string canonical;
 				std::size_t catalogCount = 0;
@@ -488,7 +512,8 @@ namespace Lifecast::Edit::Overlays
 				areas.push_back({ { "k", a.key }, { "label", a.label }, { "catalog", std::move(catalog) },
 					{ "catalogSig", std::move(catalogSig) }, { "layers", std::move(layers) } });
 			}
-			spdlog::info("[overlays] {}: sending {} areas ({}), female {}", a_why, areas.size(), counts, female);
+			spdlog::info("[overlays] {}: sending {} areas ({}), female {}{}", a_why, areas.size(), counts, female,
+				emptyRead.empty() ? std::string() : fmt::format("; first unpainted: {}", emptyRead));
 			Panel::Bridge::Send("overlays", { { "ready", true }, { "areas", std::move(areas) } });
 		}
 
