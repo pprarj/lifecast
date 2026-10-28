@@ -60,14 +60,26 @@ namespace Lifecast::Core::Settings
 		bool IsBackend(const json& a_value)
 		{
 			return a_value.is_string() && (a_value == "auto" || a_value == "prisma" || a_value == "magelight" ||
-				a_value == "meridian");
+				a_value == "meridian" || a_value == "smf");
 		}
 
-		const std::array<Key, 4> kKeys{ {
+		// The SKSE Menu Framework view's input form (1.6 E2): "all" - the
+		// window holds every input while it is focused, the stage is driven
+		// by messages - or "hybrid" - the window holds the input only from a
+		// press inside it to the release. Both were measured; "hybrid" is the
+		// default, the one with the smaller visible effect (D289). The key
+		// stays until the verdict on it.
+		bool IsSmfInput(const json& a_value)
+		{
+			return a_value.is_string() && (a_value == "all" || a_value == "hybrid");
+		}
+
+		const std::array<Key, 5> kKeys{ {
 			{ "presetsSort", "name", &IsSortOrder },
 			{ "panelScale", 1.0, &IsPanelScale },
 			{ "sectionsOpen", json::object(), &IsSectionsOpen },
 			{ "backend", "auto", &IsBackend },
+			{ "smfInput", "hybrid", &IsSmfInput },
 		} };
 
 		json g_values = json::object();
@@ -237,5 +249,11 @@ namespace Lifecast::Core::Settings
 	{
 		const auto it = g_values.find("backend");
 		return it != g_values.end() && IsBackend(*it) ? it->get<std::string>() : std::string("auto");
+	}
+
+	std::string SmfInput()
+	{
+		const auto it = g_values.find("smfInput");
+		return it != g_values.end() && IsSmfInput(*it) ? it->get<std::string>() : std::string("all");
 	}
 }

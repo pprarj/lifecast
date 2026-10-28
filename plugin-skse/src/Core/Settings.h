@@ -58,11 +58,16 @@
 //
 //   backend       "auto" | "prisma"    which web UI framework draws the panel
 //                 | "magelight"        (Panel/Panel.h); "auto". Read once at
-//                 | "meridian"         kDataLoaded: a change takes effect at
+//                 | "meridian" | "smf" kDataLoaded: a change takes effect at
 //                                      the next game start. The panel offers
 //                                      no control for it - it is set by
 //                                      writing the file, e.g. the line
 //                                          "backend": "meridian"
+//
+//   smfInput      "all" | "hybrid"     the SKSE Menu Framework view's input
+//                                      form (Panel/SmfBackend.h); "all". Read
+//                                      when the view opens; the view itself
+//                                      offers the switch (1.6 E2, temporary)
 
 #pragma once
 
@@ -75,7 +80,11 @@ namespace Lifecast::Core::Settings
 	// kDataLoaded. Safe to call twice.
 	void Install();
 
-	// The "backend" key: "auto", "prisma", "magelight" or "meridian". "auto" before
-	// Install() has read the file.
+	// The "backend" key: "auto", "prisma", "magelight", "meridian" or "smf". "auto"
+	// before Install() has read the file.
 	std::string Backend();
+
+	// The "smfInput" key: "all" or "hybrid" (Panel/SmfBackend.h). "all" before
+	// Install() has read the file.
+	std::string SmfInput();
 }

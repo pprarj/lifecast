@@ -9,6 +9,7 @@
 #include "Panel/MagelightBackend.h"
 #include "Panel/MeridianBackend.h"
 #include "Panel/PrismaBackend.h"
+#include "Panel/SmfBackend.h"
 #include "Version.h"
 
 #include <atomic>
@@ -28,10 +29,11 @@ namespace Lifecast::Panel
 			Backend& (*get)();
 		};
 
-		constexpr std::array<Row, 3> kTable{ {
+		constexpr std::array<Row, 4> kTable{ {
 			{ "prisma", &PrismaBackend },
 			{ "magelight", &MagelightBackend },
 			{ "meridian", &MeridianBackend },
+			{ "smf", &SmfBackend },
 		} };
 
 		Backend* g_backend = nullptr;

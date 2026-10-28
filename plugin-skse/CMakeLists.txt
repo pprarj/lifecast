@@ -97,6 +97,9 @@ add_commonlibsse_plugin(
         src/Panel/PrismaBackend.cpp
         src/Panel/RaceMenuFilm.cpp
         src/Panel/RaceMenuTabs.cpp
+        src/Panel/Smf/DeadKeys.cpp
+        src/Panel/Smf/View.cpp
+        src/Panel/SmfBackend.cpp
         src/Panel/Stage.cpp
         src/Panel/Switcher.cpp
         src/Preset/Content.cpp
