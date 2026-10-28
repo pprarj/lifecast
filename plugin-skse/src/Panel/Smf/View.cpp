@@ -1605,10 +1605,14 @@ namespace Lifecast::Panel::Smf
 		// no moving, no resizing - and the screen between them is the game's.
 		const float dw = io->DisplaySize.x;
 		const float dh = io->DisplaySize.y;
-		const float gap = Theme::Px(8.0f);                                // --gap
-		const float beltH = Theme::Px(48.0f);                             // --belt-height
-		const float col = (std::min)(Theme::Px(430.0f), dw * 0.34f);      // --panel-col
-		const float panelH = (std::min)(dh * 0.64f, dh - beltH - gap);    // --panel-tall, the panel always open
+		// The fixed windows in whole pixels: ImGui truncates a window's position
+		// and size, so a belt 57.6 px tall (scale 1.2) ended at 1439 and the
+		// last line of the screen - where a thrown cursor stops - was in no
+		// window (D319).
+		const float gap = Theme::Px(8.0f);                                            // --gap
+		const float beltH = std::round(Theme::Px(48.0f));                             // --belt-height
+		const float col = std::round((std::min)(Theme::Px(430.0f), dw * 0.34f));      // --panel-col
+		const float panelH = std::round((std::min)(dh * 0.64f, dh - beltH - gap));    // --panel-tall, the panel always open
 		const float beltY = dh - beltH;
 		const float stageL = col + 2.0f * gap;
 		const float stageT = 2.0f * gap;
