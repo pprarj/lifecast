@@ -6,6 +6,8 @@
 #include "Panel/Smf/Common.h"
 #include "Panel/Smf/DeadKeys.h"
 #include "Panel/Smf/Face.h"
+#include "Panel/Smf/History.h"
+#include "Panel/Smf/Presets.h"
 #include "Panel/Smf/Skin.h"
 #include "Panel/Smf/Theme.h"
 
@@ -51,6 +53,7 @@ namespace Lifecast::Panel::Smf
 			bool        has = false;
 			float       v = 0.0f;
 			bool        active = false;
+			float       before = 0.0f;  // the value when the hand took the slider (History)
 			char        typed[24] = {};
 		};
 
@@ -379,6 +382,34 @@ namespace Lifecast::Panel::Smf
 			Rect("reset");
 			IG::SameLine();
 			IG::TextDisabled("turn %.0f, distance %.0f", g_stage.turn, g_stage.distance);
+			// Undo and redo (D130: on this bar, away from Finish on the belt; D303)
+			IG::SameLine();
+			IG::TextDisabled("|");
+			IG::SameLine();
+			History::DrawButtons();
+		}
+
+		// Puts a slider back from the history: its value here, and the same
+		// final "slider-set" the row sends at the end of a drag.
+		void ApplySlider(const std::string& a_k, const json& a_v)
+		{
+			if (!a_v.is_number()) {
+				return;
+			}
+			const float v = a_v.get<float>();
+			if (const auto it = g_byKey.find(a_k); it != g_byKey.end()) {
+				auto& s = g_sliders[it->second];
+				s.v = v;
+				s.has = true;
+				s.active = false;
+			}
+			Send("slider-set", { { "k", a_k }, { "v", v }, { "final", true } });
+		}
+
+		void RecordSlider(const Slider& a_s, float a_before, float a_after)
+		{
+			const auto k = a_s.k;
+			History::Record(a_s.label, a_before, a_after, [k](const json& a_v) { ApplySlider(k, a_v); });
 		}
 
 		void DrawRow(Slider& a_s)
@@ -393,7 +424,8 @@ namespace Lifecast::Panel::Smf
 			}
 			const char* format = a_s.step >= 1.0f ? "%.0f" : "%.2f";
 			IG::SetNextItemWidth(-Theme::Px(70.0f));
-			float v = a_s.v;
+			float       v = a_s.v;
+			const float was = a_s.v;
 			if (IG::SliderFloat("##v", &v, a_s.min, a_s.max, format)) {
 				a_s.v = v;
 				a_s.active = true;
@@ -404,9 +436,13 @@ namespace Lifecast::Panel::Smf
 				}
 			}
 			Rect("s:" + a_s.k);
+			if (IG::IsItemActivated()) {
+				a_s.before = was;
+			}
 			if (IG::IsItemDeactivatedAfterEdit()) {
 				a_s.active = false;
 				Send("slider-set", { { "k", a_s.k }, { "v", a_s.v }, { "final", true } });
+				RecordSlider(a_s, a_s.before, a_s.v);
 			} else if (!IG::IsItemActive()) {
 				a_s.active = false;
 			}
@@ -419,7 +455,9 @@ namespace Lifecast::Panel::Smf
 				char*       end = nullptr;
 				const float t = std::strtof(a_s.typed, &end);
 				if (end && end != a_s.typed) {
+					const float typedWas = a_s.v;
 					a_s.v = (std::clamp)(t, a_s.min, a_s.max);
+					RecordSlider(a_s, typedWas, a_s.v);
 					spdlog::info("[smf] typed {} for {} -> {}", a_s.typed, a_s.k, a_s.v);
 					Send("slider-set", { { "k", a_s.k }, { "v", a_s.v }, { "final", true } });
 				}
@@ -519,12 +557,12 @@ namespace Lifecast::Panel::Smf
 		// The sections: the belt's categories (.belt-cat), and the small
 		// panel shows the one that is on.
 		constexpr const char* kSectionLabels[] = { "SLIDERS###sec-sliders", "LOOK###sec-look", "RACE & SEX###sec-race",
-			"RACE FACES###sec-faces", "SKIN & TINTS###sec-tints", "PAINT###sec-paint", "OBODY###sec-obody" };
+			"RACE FACES###sec-faces", "SKIN & TINTS###sec-tints", "PAINT###sec-paint", "OBODY###sec-obody", "PRESETS###sec-presets" };
 		constexpr const char* kSectionTitles[] = { "Sliders", "Look", "Race & Sex", "Race Faces", "Skin & Tints", "Paint",
-			"OBody" };
+			"OBody", "Presets" };
 		constexpr const char* kSectionRects[] = { "sec:sliders", "sec:look", "sec:race", "sec:faces", "sec:tints",
-			"sec:paint", "sec:obody" };
-		constexpr int kSections = 7;
+			"sec:paint", "sec:obody", "sec:presets" };
+		constexpr int kSections = 8;
 		constexpr int kSectionBody = 6;
 
 		// The OBody section is there only while OBody answers with presets
@@ -598,8 +636,11 @@ namespace Lifecast::Panel::Smf
 			case 5:
 				Skin::DrawPaint();
 				break;
-			default:
+			case 6:
 				Skin::DrawBody();
+				break;
+			default:
+				Presets::DrawSection();
 				break;
 			}
 		}
@@ -742,6 +783,7 @@ namespace Lifecast::Panel::Smf
 			g_dll = data.value("dll", std::string("?"));
 			g_compatible = data.value("compatible", true);
 		} else if (type == "settings") {
+			Presets::OnSettings(data);
 			const bool hybrid = data.value("smfInput", std::string("hybrid")) == "hybrid";
 			if (hybrid != g_hybrid) {
 				spdlog::info("[smf] view: input form {}", hybrid ? "hybrid" : "all");
@@ -763,6 +805,10 @@ namespace Lifecast::Panel::Smf
 				g_frameLeft = -1.0f;
 				g_frameRight = -1.0f;
 				AskAll();
+			}
+			if (!v && g_visible) {
+				// history.js: nothing undoes across the panel being hidden
+				History::Clear("the panel was hidden");
 			}
 			g_visible = v;
 		} else if (type == "card") {
@@ -798,7 +844,7 @@ namespace Lifecast::Panel::Smf
 			g_stage.free = data.value("free", false);
 			g_stage.turn = data.value("turn", 0.0);
 			g_stage.distance = data.value("distance", 0.0);
-		} else if (!Face::Receive(type, data) && !Skin::Receive(type, data)) {
+		} else if (!Face::Receive(type, data) && !Skin::Receive(type, data) && !Presets::Receive(type, data)) {
 			++g_ignored;
 		}
 		// A list stamp is answered within seconds (Core/ListSig.cpp); the
@@ -810,6 +856,9 @@ namespace Lifecast::Panel::Smf
 	{
 		Send("hello", { { "page", fmt::format("smf-view {}", Version::kString) }, { "protocol", Bridge::kProtocolVersion } });
 		AskAll();
+		// Asked once, as the page does when it mounts: the DLL sends the list
+		// and the name again each time the panel comes on screen.
+		Presets::Ask();
 		Flush();
 	}
 
@@ -880,7 +929,7 @@ namespace Lifecast::Panel::Smf
 		}
 
 		// The belt: header (the title, as wide as the panel), the categories,
-		// room for the actions E6 brings, the footer.
+		// the name and Finish (D129), the footer.
 		{
 			const Theme::Scope theme(Theme::Kind::kBelt);
 			IG::SetNextWindowPos(IG::ImVec2{ 0.0f, beltY }, IG::ImGuiCond_Always);
@@ -915,6 +964,9 @@ namespace Lifecast::Panel::Smf
 			const float footX = dw - footW - pad;
 			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ footX - pad + 0.5f, b.y0 }, IG::ImVec2{ footX - pad + 0.5f, b.y1 }, border,
 				1.0f);
+			// .belt-actions: the name and Finish (finish.js), between the categories and the footer
+			IG::SetCursorScreenPos(IG::ImVec2{ catsEnd + pad, rowY });
+			Presets::DrawFinish((std::max)(footX - pad - catsEnd - 2.0f * pad, 0.0f));
 			IG::SetCursorScreenPos(IG::ImVec2{ footX, rowY });
 			const bool hybrid = g_hybrid;
 			IG::AlignTextToFramePadding();
@@ -950,6 +1002,8 @@ namespace Lifecast::Panel::Smf
 
 		f.wantText = io->WantTextInput;
 		f.drawn = true;
+		// undokeys.js: Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z - the text fields keep theirs
+		History::Keys(io->WantTextInput);
 		g_lastLayout = fmt::format("window {:.0f},{:.0f},{:.0f},{:.0f}; {}; {}; stage {:.0f},{:.0f},{:.0f},{:.0f}", f.boxes[0].x0,
 			f.boxes[0].y0, f.boxes[0].x1, f.boxes[0].y1, BoxText(f.boxes[1]), BoxText(f.boxes[2]), stageL, stageT, stageR, stageB);
 		for (const auto& e : g_layout) {
@@ -1010,6 +1064,8 @@ namespace Lifecast::Panel::Smf
 		spdlog::info("[smf] view {}: section {}", a_what, g_section);
 		Face::LogState(a_what);
 		Skin::LogState(a_what);
+		Presets::LogState(a_what);
+		History::LogState(a_what);
 		spdlog::info("[smf] view layout: {}", g_lastLayout.empty() ? std::string("not drawn yet") : g_lastLayout);
 	}
 }

@@ -99,6 +99,8 @@ add_commonlibsse_plugin(
         src/Panel/RaceMenuTabs.cpp
         src/Panel/Smf/DeadKeys.cpp
         src/Panel/Smf/Face.cpp
+        src/Panel/Smf/History.cpp
+        src/Panel/Smf/Presets.cpp
         src/Panel/Smf/Skin.cpp
         src/Panel/Smf/Theme.cpp
         src/Panel/Smf/View.cpp

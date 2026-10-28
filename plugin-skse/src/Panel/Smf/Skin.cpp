@@ -5,6 +5,7 @@
 
 #include "Panel/Smf/Common.h"
 #include "Panel/Smf/DeadKeys.h"
+#include "Panel/Smf/History.h"
 #include "Panel/Smf/Theme.h"
 
 #include "SKSEMenuFramework/SKSEMenuFramework.h"
@@ -197,6 +198,7 @@ namespace Lifecast::Panel::Smf::Skin
 			bool              active = false;
 			char              hex[12] = {};
 			Clock::time_point sent{};
+			std::string       before;  // the colour when the hand took a row (History)
 		};
 
 		// True when a send is due; a_final says whether it is the last of a drag.
@@ -207,6 +209,7 @@ namespace Lifecast::Panel::Smf::Skin
 			bool send = false;
 			bool any = false;
 			a_final = false;
+			const auto was = HexOf(a_e.rgb);
 			// A layer has two of these (colour and glow): their widgets need ids of their own.
 			IG::PushID(a_rect.c_str());
 			for (int c = 0; c < 3; ++c) {
@@ -225,6 +228,9 @@ namespace Lifecast::Panel::Smf::Skin
 					}
 				}
 				Rect(fmt::format("{}:{}", a_rect, kKeys[c]));
+				if (IG::IsItemActivated()) {
+					a_e.before = was;
+				}
 				if (IG::IsItemDeactivatedAfterEdit()) {
 					send = true;
 					a_final = true;
@@ -244,6 +250,7 @@ namespace Lifecast::Panel::Smf::Skin
 						IG::ImGuiInputTextFlags_AutoSelectAll)) {
 				int rgb[3];
 				if (ParseHex(a_e.hex, rgb)) {
+					a_e.before = was;
 					std::copy(rgb, rgb + 3, a_e.rgb);
 					spdlog::info("[smf] view: {} colour typed {}", a_rect, HexOf(rgb));
 					send = true;
@@ -263,6 +270,7 @@ namespace Lifecast::Panel::Smf::Skin
 			int               v = 100;
 			bool              active = false;
 			Clock::time_point sent{};
+			int               before = 0;  // the value when the hand took the row (History)
 		};
 
 		bool PercentRow(const char* a_label, const std::string& a_rect, Percent& a_p, bool& a_final)
@@ -274,7 +282,8 @@ namespace Lifecast::Panel::Smf::Skin
 			IG::TextUnformatted(a_label);
 			IG::SameLine(Theme::Px(80.0f), -1.0f);
 			IG::SetNextItemWidth(-1.0f);
-			int v = a_p.v;
+			int       v = a_p.v;
+			const int was = a_p.v;
 			if (IG::SliderInt("##p", &v, 0, 100, "%d%%")) {
 				a_p.v = v;
 				const auto now = Clock::now();
@@ -284,6 +293,9 @@ namespace Lifecast::Panel::Smf::Skin
 				}
 			}
 			Rect(a_rect);
+			if (IG::IsItemActivated()) {
+				a_p.before = was;
+			}
 			if (IG::IsItemDeactivatedAfterEdit()) {
 				send = true;
 				a_final = true;
@@ -352,6 +364,38 @@ namespace Lifecast::Panel::Smf::Skin
 			a_fields["k"] = a_k;
 			a_fields["final"] = a_final;
 			Send("tint-set", std::move(a_fields));
+		}
+
+		// Puts a tint layer's field back from the history, as its own row sends it.
+		void ApplyTint(const std::string& a_k, const std::string& a_field, const json& a_v)
+		{
+			const auto it = std::find_if(g_tints.begin(), g_tints.end(), [&](const Tint& t) { return t.k == a_k; });
+			if (it == g_tints.end()) {
+				return;
+			}
+			auto& t = *it;
+			if (a_field == "index" && a_v.is_number_integer()) {
+				t.index = a_v.get<int>();
+			} else if (a_field == "texture" && a_v.is_string()) {
+				t.texture = a_v.get<std::string>();
+			} else if (a_field == "color" && a_v.is_string()) {
+				ParseHex(a_v.get<std::string>(), t.col.rgb);
+				t.col.active = false;
+			} else if (a_field == "alpha" && a_v.is_number()) {
+				t.alpha.v = static_cast<int>(std::lround(a_v.get<double>() * 100.0));
+				t.alpha.active = false;
+			} else {
+				return;
+			}
+			SendTint(a_k, { { a_field, a_v } }, true);
+		}
+
+		void RecordTint(const Tint& a_t, const char* a_field, const char* a_what, json a_before, json a_after)
+		{
+			const auto        k = a_t.k;
+			const std::string field = a_field;
+			History::Record(fmt::format("{} {}", a_t.label, a_what), std::move(a_before), std::move(a_after),
+				[k, field](const json& a_v) { ApplyTint(k, field, a_v); });
 		}
 
 		void OnTints(const json& a_data)
@@ -478,8 +522,10 @@ namespace Lifecast::Panel::Smf::Skin
 				IG::EndChild();
 				if (to != -2 && to != a_t.index) {
 					spdlog::info("[smf] view: tint {} texture {} -> {}", a_t.k, a_t.index, to);
+					const int before = a_t.index;
 					a_t.index = to;
 					SendTint(a_t.k, { { "index", to } }, true);
+					RecordTint(a_t, "index", "Texture", before, to);
 				}
 			}
 			if (a_t.hasCatalog) {
@@ -493,8 +539,10 @@ namespace Lifecast::Panel::Smf::Skin
 				const int picked = CatalogList("tcat", a_t.find, a_t.catalog, at, false, 160.0f, "war paint catalog");
 				if (picked >= 0) {
 					spdlog::info("[smf] view: tint {} catalog {} '{}'", a_t.k, picked, a_t.catalog[picked].name);
+					auto before = a_t.texture.empty() ? json() : json(a_t.texture);
 					a_t.texture = a_t.catalog[picked].texture;
 					SendTint(a_t.k, { { "texture", a_t.catalog[picked].texture } }, true);
+					RecordTint(a_t, "texture", "Catalog", std::move(before), a_t.texture);
 				}
 			}
 			if (none) {
@@ -504,6 +552,9 @@ namespace Lifecast::Panel::Smf::Skin
 			bool final = false;
 			if (ColorRows(rect, a_t.col, final)) {
 				SendTint(a_t.k, { { "color", HexOf(a_t.col.rgb) } }, final);
+				if (final) {
+					RecordTint(a_t, "color", "Color", a_t.col.before, HexOf(a_t.col.rgb));
+				}
 			}
 			if (!a_t.swatches.empty()) {
 				for (int i = 0; i < static_cast<int>(a_t.swatches.size()); ++i) {
@@ -514,10 +565,12 @@ namespace Lifecast::Panel::Smf::Skin
 					}
 					IG::PushID(i);
 					if (IG::ColorButton("##swatch", Vec(rgb), 0, IG::ImVec2{ Theme::Px(18.0f), Theme::Px(18.0f) })) {
+						const auto before = HexOf(a_t.col.rgb);
 						std::copy(rgb, rgb + 3, a_t.col.rgb);
 						const auto hex = HexOf(rgb);
 						spdlog::info("[smf] view: tint {} swatch {} {}", a_t.k, i, hex);
 						SendTint(a_t.k, { { "color", hex } }, true);
+						RecordTint(a_t, "color", "Color", before, hex);
 					}
 					Rect(fmt::format("{}:sw:{}", rect, i));
 					IG::PopID();
@@ -525,6 +578,9 @@ namespace Lifecast::Panel::Smf::Skin
 			}
 			if (PercentRow("Intensity", rect + ":alpha", a_t.alpha, final)) {
 				SendTint(a_t.k, { { "alpha", a_t.alpha.v / 100.0 } }, final);
+				if (final) {
+					RecordTint(a_t, "alpha", "Intensity", a_t.alpha.before / 100.0, a_t.alpha.v / 100.0);
+				}
 			}
 		}
 
@@ -565,6 +621,47 @@ namespace Lifecast::Panel::Smf::Skin
 			a_fields["i"] = a_l.i;
 			a_fields["final"] = a_final;
 			Send("overlay-set", std::move(a_fields));
+		}
+
+		// Puts a paint layer's field back from the history, as its own row sends it.
+		void ApplyOverlay(const std::string& a_k, int a_i, const std::string& a_field, const json& a_v)
+		{
+			const auto at = std::find_if(g_areas.begin(), g_areas.end(), [&](const Area& a) { return a.k == a_k; });
+			if (at == g_areas.end()) {
+				return;
+			}
+			auto&      area = *at;
+			const auto lt = std::find_if(area.layers.begin(), area.layers.end(), [&](const Layer& l) { return l.i == a_i; });
+			if (lt == area.layers.end()) {
+				return;
+			}
+			auto& l = *lt;
+			if (a_field == "texture" && a_v.is_string()) {
+				l.texture = a_v.get<std::string>();
+				const int c = CatalogAt(area.catalog, l.texture);
+				l.name = c >= 0 ? area.catalog[c].name : std::string();
+			} else if ((a_field == "color" || a_field == "glow") && a_v.is_string()) {
+				auto& e = a_field == "color" ? l.col : l.glow;
+				ParseHex(a_v.get<std::string>(), e.rgb);
+				e.active = false;
+			} else if ((a_field == "alpha" || a_field == "glowAlpha") && a_v.is_number()) {
+				auto& p = a_field == "alpha" ? l.alpha : l.glowAlpha;
+				p.v = static_cast<int>(std::lround(a_v.get<double>() * 100.0));
+				p.active = false;
+			} else {
+				return;
+			}
+			SendOverlay(area, l, { { a_field, a_v } }, true);
+		}
+
+		void RecordOverlay(const Area& a_a, const Layer& a_l, const char* a_field, const char* a_what, json a_before,
+			json a_after)
+		{
+			const auto        k = a_a.k;
+			const int         i = a_l.i;
+			const std::string field = a_field;
+			History::Record(fmt::format("{} Layer {} {}", a_a.label, a_l.i + 1, a_what), std::move(a_before),
+				std::move(a_after), [k, i, field](const json& a_v) { ApplyOverlay(k, i, field, a_v); });
 		}
 
 		void OnOverlays(const json& a_data)
@@ -674,9 +771,11 @@ namespace Lifecast::Panel::Smf::Skin
 				const auto texture = to >= 0 ? a_a.catalog[to].texture : std::string();
 				spdlog::info("[smf] view: paint {} layer {} texture {} -> {} '{}'", a_a.k, a_l.i, at, to,
 					to >= 0 ? a_a.catalog[to].name : std::string("None"));
+				const auto before = a_l.texture;
 				a_l.texture = texture;
 				a_l.name = to >= 0 ? a_a.catalog[to].name : std::string();
 				SendOverlay(a_a, a_l, { { "texture", texture } }, true);
+				RecordOverlay(a_a, a_l, "texture", "Texture", before, texture);
 			}
 			if (!a_l.Painted()) {
 				IG::TextDisabled("No texture on this layer: choose one to colour it.");
@@ -687,16 +786,29 @@ namespace Lifecast::Panel::Smf::Skin
 			Theme::Group("Colour");
 			if (ColorRows(rect + ":color", a_l.col, final)) {
 				SendOverlay(a_a, a_l, { { "color", HexOf(a_l.col.rgb) } }, final);
+				if (final) {
+					RecordOverlay(a_a, a_l, "color", "Colour", a_l.col.before, HexOf(a_l.col.rgb));
+				}
 			}
 			if (PercentRow("Intensity", rect + ":alpha", a_l.alpha, final)) {
 				SendOverlay(a_a, a_l, { { "alpha", a_l.alpha.v / 100.0 } }, final);
+				if (final) {
+					RecordOverlay(a_a, a_l, "alpha", "Intensity", a_l.alpha.before / 100.0, a_l.alpha.v / 100.0);
+				}
 			}
 			Theme::Group("Glow");
 			if (ColorRows(rect + ":glow", a_l.glow, final)) {
 				SendOverlay(a_a, a_l, { { "glow", HexOf(a_l.glow.rgb) } }, final);
+				if (final) {
+					RecordOverlay(a_a, a_l, "glow", "Glow", a_l.glow.before, HexOf(a_l.glow.rgb));
+				}
 			}
 			if (PercentRow("Strength", rect + ":glowalpha", a_l.glowAlpha, final)) {
 				SendOverlay(a_a, a_l, { { "glowAlpha", a_l.glowAlpha.v / 100.0 } }, final);
+				if (final) {
+					RecordOverlay(a_a, a_l, "glowAlpha", "Glow Strength", a_l.glowAlpha.before / 100.0,
+						a_l.glowAlpha.v / 100.0);
+				}
 			}
 			IG::PopID();
 		}

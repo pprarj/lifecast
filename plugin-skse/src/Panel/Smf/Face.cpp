@@ -5,6 +5,7 @@
 
 #include "Panel/Smf/Common.h"
 #include "Panel/Smf/DeadKeys.h"
+#include "Panel/Smf/History.h"
 #include "Panel/Smf/Theme.h"
 
 #include "SKSEMenuFramework/SKSEMenuFramework.h"
@@ -54,6 +55,7 @@ namespace Lifecast::Panel::Smf::Face
 			std::size_t              filteredItems = 0;
 			std::vector<int>         filtered;
 			int                      dragged = -1;
+			json                     dragBefore;  // the place when the hand took the index slider (History)
 		};
 
 		struct Weight
@@ -89,6 +91,7 @@ namespace Lifecast::Panel::Smf::Face
 		std::map<std::string, List> g_lists;
 		Weight                      g_weight;
 		Clock::time_point           g_weightSent{};
+		float                       g_weightBefore = 0.0f;  // the weight when the hand took the slider (History)
 		char                        g_hairHex[16] = {};
 		std::uint32_t               g_lookSets = 0;
 
@@ -304,6 +307,82 @@ namespace Lifecast::Panel::Smf::Face
 			Send("look-set", { { "k", a_key }, { "v", std::move(a_v) }, { "final", a_final } });
 		}
 
+		// ---------------------------------------------------------- history
+
+		const char* LabelOf(std::string_view a_key)
+		{
+			for (const auto& r : kRows) {
+				if (a_key == r.key) {
+					return r.label;
+				}
+			}
+			return "Look";
+		}
+
+		// A list's place, for the history: null while the list rests on no entry.
+		json Place(const List& a_l)
+		{
+			return a_l.index >= 0 ? json(a_l.index) : json();
+		}
+
+		// Puts a list back on an entry, as its arrows do.
+		void ApplyPlace(const std::string& a_key, const json& a_v)
+		{
+			if (!a_v.is_number_integer()) {
+				return;
+			}
+			auto& l = g_lists[a_key];
+			l.index = a_v.get<int>();
+			l.dragged = -1;
+			SendLook(a_key.c_str(), l.index, true);
+		}
+
+		void RecordPlace(const char* a_key, json a_before, int a_after)
+		{
+			const std::string k = a_key;
+			History::Record(LabelOf(a_key), std::move(a_before), a_after, [k](const json& a_v) { ApplyPlace(k, a_v); });
+		}
+
+		// The hair colour is a swatch (its index) or a free colour (its hex).
+		json HairNow(const List& a_l)
+		{
+			if (a_l.index >= 0) {
+				return a_l.index;
+			}
+			return a_l.color.empty() ? json() : json(a_l.color);
+		}
+
+		void ApplyHair(const json& a_v)
+		{
+			auto& l = g_lists["hair-color"];
+			if (a_v.is_number_integer()) {
+				l.index = a_v.get<int>();
+				if (l.index < static_cast<int>(l.swatches.size())) {
+					l.color = l.swatches[l.index];
+				}
+				SendLook("hair-color", l.index, true);
+			} else if (a_v.is_string()) {
+				l.index = -1;
+				l.color = a_v.get<std::string>();
+				SendLook("hair-rgb", l.color, true);
+			}
+		}
+
+		void RecordHair(json a_before, json a_after)
+		{
+			History::Record("Hair Color", std::move(a_before), std::move(a_after), [](const json& a_v) { ApplyHair(a_v); });
+		}
+
+		void ApplyWeight(const json& a_v)
+		{
+			if (!a_v.is_number()) {
+				return;
+			}
+			g_weight.v = a_v.get<float>();
+			g_weight.active = false;
+			SendLook("weight", g_weight.v, true);
+		}
+
 		bool ParseHex(std::string_view a_text, float a_rgb[3])
 		{
 			if (!a_text.empty() && a_text.front() == '#') {
@@ -333,15 +412,19 @@ namespace Lifecast::Panel::Smf::Face
 			const int last = a_l.count - 1;
 			if (IG::ArrowButton("##prev", IG::ImGuiDir_Left) && a_l.count > 0) {
 				const int to = a_l.index <= 0 ? last : a_l.index - 1;
+				auto      before = Place(a_l);
 				a_l.index = to;
 				SendLook(a_key, to, true);
+				RecordPlace(a_key, std::move(before), to);
 			}
 			Rect(fmt::format("look:{}:prev", a_key));
 			IG::SameLine();
 			if (IG::ArrowButton("##next", IG::ImGuiDir_Right) && a_l.count > 0) {
 				const int to = a_l.index >= last ? 0 : a_l.index + 1;
+				auto      before = Place(a_l);
 				a_l.index = to;
 				SendLook(a_key, to, true);
+				RecordPlace(a_key, std::move(before), to);
 			}
 			Rect(fmt::format("look:{}:next", a_key));
 			IG::SameLine();
@@ -353,9 +436,13 @@ namespace Lifecast::Panel::Smf::Face
 				a_l.dragged = v;
 			}
 			Rect(fmt::format("look:{}:slider", a_key));
+			if (IG::IsItemActivated()) {
+				a_l.dragBefore = Place(a_l);
+			}
 			if (IG::IsItemDeactivatedAfterEdit() && a_l.dragged >= 0) {
 				a_l.index = a_l.dragged;
 				SendLook(a_key, a_l.dragged, true);
+				RecordPlace(a_key, a_l.dragBefore, a_l.dragged);
 			}
 			if (!IG::IsItemActive()) {
 				a_l.dragged = -1;
@@ -399,8 +486,10 @@ namespace Lifecast::Panel::Smf::Face
 					IG::PushID(i);
 					if (IG::Selectable(it.label.c_str(), i == a_l.index)) {
 						spdlog::info("[smf] view: look {} pick {} '{}'", a_key, i, it.label);
+						auto before = Place(a_l);
 						a_l.index = i;
 						SendLook(a_key, i, true);
+						RecordPlace(a_key, std::move(before), i);
 					}
 					Rect(fmt::format("li:{}:{}", a_key, i));
 					IG::PopID();
@@ -429,8 +518,11 @@ namespace Lifecast::Panel::Smf::Face
 				if (IG::ColorButton("##swatch", IG::ImVec4{ rgb[0], rgb[1], rgb[2], 1.0f },
 						current ? 0 : IG::ImGuiColorEditFlags_NoBorder, IG::ImVec2{ Theme::Px(18.0f), Theme::Px(18.0f) })) {
 					spdlog::info("[smf] view: hair colour swatch {} {}", i, a_l.swatches[i]);
+					auto before = HairNow(a_l);
 					a_l.index = i;
+					a_l.color = a_l.swatches[i];
 					SendLook("hair-color", i, true);
+					RecordHair(std::move(before), i);
 				}
 				if (current) {
 					IG::PopStyleColor();
@@ -455,9 +547,11 @@ namespace Lifecast::Panel::Smf::Face
 					const auto hex = fmt::format("#{:02X}{:02X}{:02X}", static_cast<int>(rgb[0] * 255.0f + 0.5f),
 						static_cast<int>(rgb[1] * 255.0f + 0.5f), static_cast<int>(rgb[2] * 255.0f + 0.5f));
 					spdlog::info("[smf] view: hair colour typed {}", hex);
+					auto before = HairNow(a_l);
 					a_l.index = -1;
 					a_l.color = hex;
 					SendLook("hair-rgb", hex, true);
+					RecordHair(std::move(before), hex);
 				} else {
 					spdlog::info("[smf] view: hair colour '{}' is not six hex digits - not sent", g_hairHex);
 				}
@@ -523,7 +617,8 @@ namespace Lifecast::Panel::Smf::Face
 		if (g_weight.present) {
 			Theme::Group("Weight");
 			IG::SetNextItemWidth(-1.0f);
-			float v = g_weight.v;
+			float       v = g_weight.v;
+			const float was = g_weight.v;
 			if (IG::SliderFloat("##weight", &v, g_weight.min, g_weight.max, "%.0f")) {
 				g_weight.v = v;
 				g_weight.active = true;
@@ -534,10 +629,14 @@ namespace Lifecast::Panel::Smf::Face
 				}
 			}
 			Rect("look:weight");
+			if (IG::IsItemActivated()) {
+				g_weightBefore = was;
+			}
 			if (IG::IsItemDeactivatedAfterEdit()) {
 				g_weight.active = false;
 				spdlog::info("[smf] view: weight released at {:.0f}", g_weight.v);
 				SendLook("weight", g_weight.v, true);
+				History::Record("Weight", g_weightBefore, g_weight.v, [](const json& a_v) { ApplyWeight(a_v); });
 			} else if (!IG::IsItemActive()) {
 				g_weight.active = false;
 			}
@@ -582,6 +681,7 @@ namespace Lifecast::Panel::Smf::Face
 				g_rsStatus = fmt::format("changing to {}...", f ? "female" : "male");
 				spdlog::info("[smf] view: sex-set {}", f ? "female" : "male");
 				Send("sex-set", { { "female", f == 1 } });
+				History::Clear("the sex was changed");
 			}
 			Rect(f ? "sex:female" : "sex:male");
 		}
@@ -597,6 +697,7 @@ namespace Lifecast::Panel::Smf::Face
 				g_rsStatus = fmt::format("changing to {}...", g_races[i].name);
 				spdlog::info("[smf] view: race-set {} '{}' ({})", i, g_races[i].name, g_races[i].id);
 				Send("race-set", { { "i", i } });
+				History::Clear("the race was changed");
 			}
 			Rect(fmt::format("race:{}", i));
 			IG::PopID();
@@ -620,6 +721,7 @@ namespace Lifecast::Panel::Smf::Face
 			spdlog::info("[smf] view: race-preset-apply {} ({})", a_i,
 				a_i < static_cast<int>(g_rpNames.size()) ? g_rpNames[a_i] : std::string());
 			Send("race-preset-apply", { { "i", a_i } });
+			History::Clear("a race face was applied");
 		};
 		if (IG::ArrowButton("##rp-prev", IG::ImGuiDir_Left)) {
 			apply(g_rpAt <= 0 ? g_rpCount - 1 : g_rpAt - 1);
