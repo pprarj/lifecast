@@ -92,7 +92,9 @@
 //                                 where it is until the player moves it. Turning it
 //                                 back on frames once. Back to ON when the menu closes.
 //                                 The state carries it as "lock".
-//   page -> dll  "stage-zoom"   {} standard mode only: asks RaceMenu for its own zoom (far <-> near)
+//   page -> dll  "stage-zoom"   { "from": text } standard mode only: asks RaceMenu for its own zoom (far <-> near)
+//                                 "from" says what asked (key, dll-lalt, wheel,
+//                                 button, pad); it is only logged.
 //   page -> dll  "stage-frame"  { "on": bool, "left": frac, "right": frac }
 //                                 the character view's edges as a fraction of
 //                                 the window width, and whether the camera
@@ -133,6 +135,8 @@
 //                                 liftUp and panMax, and false of the other
 //                                 three. Reporting them together would disable
 //                                 a button from a number that is not its bound.
+//   dll -> page  "key-lalt"     {} Prisma only: LAlt went down with the panel focused
+//                                 (PrismaBackend.cpp); the page treats it as its own LAlt.
 //   dll -> page  "stage-visible" { "on": bool }  hides or shows the frame and
 //                                 its controls; the view itself is untouched.
 //                                 Not sent by this module - it is there for

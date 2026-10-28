@@ -10,7 +10,8 @@
 // Where a row goes follows that tab. The game's 18 face morphs keep the
 // sections they always had (the table below is where they sit, not which
 // exist). The rest goes to the section of the part it changes when the page
-// has one (Eyes, Brows, Mouth, Hair, Body), to a section of its own per tab
+// has one (Eyes, Brows, Mouth, Hair), RaceMenu's Body tab to Body Sliders
+// (beside Weight, in the Body category), to a section of its own per tab
 // otherwise, and a mod's tab is a section of its own, empty when the mod put
 // nothing in it this time - RaceMenu shows it empty too.
 //
@@ -33,7 +34,13 @@
   const FACE = ["Nose", "Jaw", "Cheekbones", "Eyes", "Brows", "Mouth", "Chin"];
 
   // RaceMenu's tabs by bit that have a section here already: [flag, section key].
-  const HOMES = [[32, "face:Eyes"], [64, "face:Brows"], [128, "face:Mouth"], [256, "look:Hair"], [4, "look:Body"]];
+  const HOMES = [[32, "face:Eyes"], [64, "face:Brows"], [128, "face:Mouth"], [256, "look:Hair"]];
+  // RaceMenu's Body tab (bit 4). What a mod files there gets a section of its
+  // own: the Weight section holds the weight and nothing else (1.5 E5, D283).
+  // RaceMenu gives the tab no name of the mod's, so the title is neutral. Like
+  // every section made from the list, it shows only while something is in it.
+  const BODY_TAB = 4;
+  const BODY = { key: "body:sliders", at: "own", title: "Body Sliders" };
   // The body scale tab has its own section, under Body.
   const SCALES = "rsm_body_scale";
 
@@ -75,7 +82,6 @@
     place("face:" + title);
   }
   place("look:Hair");
-  place("look:Body");
 
   function titleOf(label) {
     if (typeof label !== "string" || label === "") {
@@ -174,6 +180,9 @@
       return tab.key === SCALES
         ? { key: "scales", at: "own", title: "Body Scales" }
         : { key: "morph:" + tab.key, at: "own", title: tab.label };
+    }
+    if (tab.flag === BODY_TAB) {
+      return BODY;
     }
     const home = HOMES.find((h) => h[0] === tab.flag);
     if (home && places.has(home[1])) {

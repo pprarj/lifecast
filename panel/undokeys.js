@@ -17,7 +17,14 @@
 // cannot stay locked.
 //
 // Keys are read by `key`, never `code`: the Prisma page reports `code` empty
-// (measured).
+// (measured). A backend may hand the letter over as the control character
+// Ctrl makes of it (U+001A for Z, U+0019 for Y) or only by keyCode, so those
+// count too (1.5 E5, D283).
+//
+// Every Ctrl+Z / Ctrl+Y that reaches the page, and every Z / Y outside a text
+// field, goes to the Lifecast.log as one "undo-key" line - what the page
+// received and what it did with it - so a round on a real keyboard says
+// where a press that did nothing stopped.
 //
 // In a text field the shortcut belongs to the field (name, search, a typed
 // value): the history is not touched and the key goes on to the field.
@@ -43,18 +50,46 @@
 
   function letterOf(event) {
     const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
-    return key === "z" || key === "y" ? key : null;
+    if (key === "z" || key === "y") {
+      return key;
+    }
+    if (key === "\u001a") {
+      return "z";
+    }
+    if (key === "\u0019") {
+      return "y";
+    }
+    if (key === "" || key === "unidentified") {
+      return event.keyCode === 90 ? "z" : event.keyCode === 89 ? "y" : null;
+    }
+    return null;
+  }
+
+  function report(event, letter, what) {
+    LifecastBridge.send("undo-key", {
+      l: letter, what: what, key: event.key, code: event.code, kc: event.keyCode,
+      ctrl: event.ctrlKey, sh: event.shiftKey, alt: event.altKey, rp: event.repeat,
+    });
   }
 
   document.addEventListener("keydown", (event) => {
-    if (!event.ctrlKey || event.altKey || event.metaKey) {
-      return;
-    }
     const letter = letterOf(event);
     if (!letter) {
       return;
     }
-    if (isTextField(document.activeElement)) {
+    const field = isTextField(document.activeElement);
+    if (!event.ctrlKey) {
+      if (!field) {
+        report(event, letter, "no-ctrl");
+      }
+      return;
+    }
+    if (event.altKey || event.metaKey) {
+      report(event, letter, "alt-or-meta");
+      return;
+    }
+    if (field) {
+      report(event, letter, "text-field");
       return;
     }
     // Ours from here: the page's default (and the game's) never sees it.
@@ -64,9 +99,12 @@
     const last = down.get(letter);
     down.set(letter, now);
     if (event.repeat || (last !== undefined && now - last < FORGET_MS)) {
+      report(event, letter, "same-press");
       return; // the same physical press again
     }
-    if (letter === "z" && !event.shiftKey) {
+    const undo = letter === "z" && !event.shiftKey;
+    report(event, letter, undo ? "undo" : "redo");
+    if (undo) {
       LifecastHistory.undo();
     } else {
       LifecastHistory.redo();

@@ -228,11 +228,21 @@ const LifecastHistory = (() => {
       undoAllButton.disabled = busy || at === 0;
       undoAllButton.title = at === 0 ? "Nothing to undo" : "Undo everything since the panel opened";
       redoButton.disabled = busy || at >= entries.length;
-      undoButton.title = at === 0 ? "Nothing to undo" : "Undo " + entries[at - 1].label;
-      redoButton.title = at >= entries.length ? "Nothing to redo" : "Redo " + entries[at].label;
+      // The shortcut rides on the title, on every backend (1.5 E5, D283).
+      undoButton.title = (at === 0 ? "Nothing to undo" : "Undo " + entries[at - 1].label) + " (Ctrl+Z)";
+      redoButton.title = (at >= entries.length ? "Nothing to redo" : "Redo " + entries[at].label) + " (Ctrl+Y)";
     };
     listeners.push(paint);
     paint();
+
+    // Prisma UI draws no title tooltip (measured, 1.5 E5): there the
+    // shortcut goes on the label itself.
+    LifecastBridge.whenAttached((attached) => {
+      if (attached && LifecastBridge.backend() === "prisma") {
+        undoButton.textContent = "Undo (Ctrl+Z)";
+        redoButton.textContent = "Redo (Ctrl+Y)";
+      }
+    });
   }
 
   wire();

@@ -29,7 +29,7 @@ const LifecastGroups = (() => {
     { title: "Skin & Paint", test: (key) => key === "tints" || key.indexOf("overlay:") === 0 || key === "face:paint" },
     { title: "Morphs", test: (key) => key.indexOf("morph:") === 0 },
     { title: "Head", test: (key) => key === "look:Hair" || key === "look:Features" || (key.indexOf("face:") === 0 && key !== "face:paint") },
-    { title: "Body", test: (key) => key === "sex" || key === "look:Body" || key === "scales" || key === "obody" },
+    { title: "Body", test: (key) => key === "sex" || key === "look:Body" || key === "body:sliders" || key === "scales" || key === "obody" },
     // Race is the race picker (racesex.js), and still holds RaceMenu's
     // doors (delegate) that have no public way in yet (D125).
     { title: "Race", test: (key) => key === "race" || key === "delegate" },
@@ -63,7 +63,7 @@ const LifecastGroups = (() => {
     "morph:*",
     "look:Hair", "look:Features",
     "face:RacePresets", "face:Nose", "face:Jaw", "face:Cheekbones", "face:Eyes", "face:Brows", "face:Mouth", "face:Chin", "face:*",
-    "sex", "look:Body", "scales", "obody",
+    "sex", "look:Body", "body:sliders", "scales", "obody",
     "race", "delegate",
     "presets",
     "debug:tuning",

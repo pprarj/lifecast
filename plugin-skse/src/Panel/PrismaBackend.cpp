@@ -107,6 +107,26 @@ namespace Lifecast::Panel
 			}
 		}
 
+		// LAlt, the standard camera's far/near swap (stage.js). On Prisma the
+		// key does not reach the page as AltLeft (1.5 E5, D283), so it is
+		// heard here, on the game's own input, while the panel holds focus,
+		// and handed to the page, which decides as it does for the key itself
+		// (standard mode only, one swap per 400 ms). The key goes on: nothing
+		// else in the menu answers it while Prisma has focus.
+		constexpr std::uint32_t kLeftAlt = 0x38;  // DirectInput scan code, DIK_LMENU
+		std::uint32_t           g_leftAltHits = 0;
+
+		void RouteLeftAlt()
+		{
+			if (auto* tasks = SKSE::GetTaskInterface()) {
+				tasks->AddTask([]() {
+					++g_leftAltHits;
+					spdlog::info("[prisma] LAlt #{} with the panel focused - routed to the page", g_leftAltHits);
+					Bridge::Send("key-lalt");
+				});
+			}
+		}
+
 		class ChordSink : public RE::BSTEventSink<RE::InputEvent*>
 		{
 		public:
@@ -133,6 +153,10 @@ namespace Lifecast::Panel
 						continue;
 					}
 					const auto code = button->GetIDCode();
+					if (code == kLeftAlt && button->IsDown() && HasFocusNow()) {
+						RouteLeftAlt();
+						continue;
+					}
 					if (key2 != 0 && code == key2) {
 						g_chordKey2Held = button->IsPressed();
 						continue;

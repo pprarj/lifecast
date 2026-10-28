@@ -198,7 +198,7 @@
         LifecastBridge.send("stage-lock", { on: !state.lock });
       }
     }, (s) => !!s.forced);
-  const nearButton = button("Zoom", "RaceMenu's own zoom, far and near (LAlt)", () => sendZoom(), null);
+  const nearButton = button("Zoom", "RaceMenu's own zoom, far and near (LAlt)", () => sendZoom("button"), null);
   group("Camera", [modeSwitch, lockSwitch, nearButton]);
   const zoomGroup = group("Zoom", [
     button("+", "Closer", () => move("distance", -DISTANCE_STEP),
@@ -312,7 +312,7 @@
     if (state.free) {
       move("distance", -DISTANCE_STEP);
     } else {
-      sendZoom();
+      sendZoom("pad");
     }
   });
 
@@ -325,7 +325,7 @@
     if (state.free) {
       move("distance", DISTANCE_STEP);
     } else {
-      sendZoom();
+      sendZoom("pad");
     }
   });
 
@@ -338,7 +338,7 @@
       // Wheel up zooms in, down zooms out; RaceMenu only has the two positions,
       // so a turn toward the one already shown does nothing.
       if (e.deltaY !== 0 && (e.deltaY < 0) !== zoomedIn) {
-        sendZoom();
+        sendZoom("wheel");
       }
       return;
     }
@@ -346,19 +346,25 @@
     e.preventDefault();
   }, { passive: false });
 
-  // LAlt swaps far and near in standard. The altKey reaches the DOM with the
-  // panel focused (measured 2026-09-28), so nothing has to be routed to the
-  // game. preventDefault keeps the browser from taking the key for a menu.
+  // LAlt swaps far and near in standard. On Meridian and Magelight the key
+  // reaches the DOM with the panel focused (measured 2026-09-28 and in 1.5),
+  // so nothing has to be routed to the game; preventDefault keeps the browser
+  // from taking the key for a menu. On Prisma it does not reach the page as
+  // AltLeft (1.5 E5, D283), so the DLL hears it on the game's own input and
+  // sends "key-lalt" instead. Both end in sendZoom, so a press that came both
+  // ways is one swap.
   // The DLL drops a second request inside 400 ms; the page keeps the same
   // window so its far/near guess flips only when a request really went out.
+  // from names what asked (key, dll-lalt, wheel, button, pad): the DLL logs
+  // every page message raw, so the log says which way a swap came.
   let zoomedIn = false;
   let zoomAt = 0;
-  function sendZoom() {
+  function sendZoom(from) {
     const now = Date.now();
     if (state && state.ready && !state.free && now - zoomAt >= 400) {
       zoomAt = now;
       zoomedIn = !zoomedIn;
-      LifecastBridge.send("stage-zoom");
+      LifecastBridge.send("stage-zoom", { from: from || "?" });
     }
   }
 
@@ -368,8 +374,12 @@
     }
     if (state && state.ready && !state.free) {
       e.preventDefault();
-      sendZoom();
+      sendZoom("key");
     }
+  });
+
+  LifecastBridge.on("key-lalt", () => {
+    sendZoom("dll-lalt");
   });
 
   // ----- the tuning knobs (development builds only) ---------------------------

@@ -49,32 +49,76 @@ namespace Lifecast::Panel
 		// never showed; sent half a second after the Fader Menu closed, it did
 		// (1.5 E2b conserto, D280). So the notice waits for the fade, and goes
 		// out a moment after the last of the two menus has closed.
+		//
+		// A new game is the other case (1.5 E5, D283): the RaceSex Menu opens
+		// while the Fader Menu is still listed open, and no close of it comes
+		// for as long as the character is being made. So the notice is looked
+		// at again every second, not only on a close; and with the RaceSex
+		// Menu up it goes out as a message box over it - the editor the
+		// notice is about, and the one place the player is looking.
 		std::atomic_bool          g_noticePending = false;
+		std::atomic_bool          g_noticeScheduled = false;
+		int                       g_noticeTries = 0;
 		constexpr auto            kNoticeDelay = std::chrono::milliseconds(1000);
+		constexpr int             kNoticeMaxTries = 600;  // ten minutes of loading screens
+
+		void ShowNoticeSoon();
 
 		void ShowNotice()
 		{
 			if (g_noticed || !g_noticePending) {
 				return;
 			}
-			auto* ui = RE::UI::GetSingleton();
-			if (ui && (ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) || ui->IsMenuOpen(RE::FaderMenu::MENU_NAME))) {
-				// The next close brings it back here.
+			auto*      ui = RE::UI::GetSingleton();
+			const bool loading = ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
+			const bool fader = ui && ui->IsMenuOpen(RE::FaderMenu::MENU_NAME);
+			const bool chargen = ui && ui->IsMenuOpen(RE::RaceSexMenu::MENU_NAME);
+			++g_noticeTries;
+			if (loading || (fader && !chargen)) {
+				if (g_noticeTries == 1) {
+					spdlog::info("[panel] on-screen notice not yet: Loading Menu {}, Fader Menu {} - looked at again "
+								 "every second",
+						loading, fader);
+				}
+				if (g_noticeTries >= kNoticeMaxTries) {
+					g_noticePending = false;
+					spdlog::warn("[panel] on-screen notice dropped: the load never finished fading ({} looks)",
+						g_noticeTries);
+					return;
+				}
+				ShowNoticeSoon();
 				return;
 			}
 			g_noticePending = false;
 			g_noticed = true;
+			if (chargen) {
+				RE::DebugMessageBox(g_notice.c_str());
+				spdlog::info("[panel] on-screen notice, once this game session, as a message box over the RaceSex "
+							 "Menu (Fader Menu {}, look {}): \"{}\"",
+					fader, g_noticeTries, g_notice);
+				return;
+			}
 			RE::SendHUDMessage::ShowHUDMessage(g_notice.c_str());
-			spdlog::info("[panel] on-screen notice, once this game session, after the load's fade: \"{}\"", g_notice);
+			spdlog::info("[panel] on-screen notice, once this game session, after the load's fade (look {}): \"{}\"",
+				g_noticeTries, g_notice);
 		}
 
-		// Any thread. The notice is shown from the game thread, a moment later.
+		// Any thread. The notice is looked at from the game thread, a moment
+		// later; one look in flight at a time.
 		void ShowNoticeSoon()
 		{
+			if (g_noticeScheduled.exchange(true)) {
+				return;
+			}
 			std::thread([]() {
 				std::this_thread::sleep_for(kNoticeDelay);
 				if (auto* tasks = SKSE::GetTaskInterface()) {
-					tasks->AddTask([]() { ShowNotice(); });
+					tasks->AddTask([]() {
+						g_noticeScheduled = false;
+						ShowNotice();
+					});
+				} else {
+					g_noticeScheduled = false;
 				}
 			}).detach();
 		}
@@ -171,6 +215,10 @@ namespace Lifecast::Panel
 	{
 		Bridge::On("hello", &OnHello);
 		Bridge::On("card-state", &OnCardState);
+		// undokeys.js: one line per Ctrl+Z / Ctrl+Y the page received, with
+		// what it did with it (1.5 E5, D283). The bridge already logs every
+		// page message raw; this only keeps the type from being "unknown".
+		Bridge::On("undo-key", [](const nlohmann::json&) {});
 	}
 
 	void OnInputLoaded()

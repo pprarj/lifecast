@@ -73,7 +73,7 @@ const LifecastPad = (() => {
       // A row scrolled out of its list is not a stop for a move across the
       // page: the rows of a list are walked one by one (go()), and a clipped
       // one would be "nearest" to a control below the list.
-      if (el.classList.contains("pad-row") && clippedRow(el)) {
+      if (el.classList.contains("pad-row") && isRowClipped(el)) {
         continue;
       }
       if (!hidden(el)) {
@@ -83,7 +83,7 @@ const LifecastPad = (() => {
     return out;
   }
 
-  function clippedRow(a_el) {
+  function isRowClipped(a_el) {
     const list = a_el.parentElement;
     if (!list) {
       return false;
