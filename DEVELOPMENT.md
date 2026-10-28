@@ -80,6 +80,26 @@ DLL it ships is the same in every archive.
 A copy does not delete: a file removed from `panel/` stays in the destination
 until you remove it there too.
 
+### The SKSE Menu Framework view
+
+SKSE Menu Framework (`"smf"` in the `backend` key) is the one framework with no
+web page. The DLL draws the interface itself with the Dear ImGui that the
+framework exposes, so there is nothing to copy from `panel/` for it. The code
+lives in `plugin-skse/src/Panel/SmfBackend.cpp` (the backend: window, focus,
+the exit chord) and `plugin-skse/src/Panel/Smf/` (the view: theme, sections,
+presets, history, character control). It talks to the same editing code as the
+web panel, through the same message protocol.
+
+Because there is no page to look for, the backend is identified by a marker
+file, `Data/SKSE/Plugins/Lifecast/smf-package.txt`. With `"auto"`, the DLL picks
+the first backend of its table that is present and available, and the marker
+counts as the presence of this one. To run it from a source build, create that
+file (any text) or set `"backend": "smf"` in `settings.json`. A forced `"smf"`
+without the framework installed does not fall back to another backend.
+
+The framework's header is vendored under `plugin-skse/extern/SKSEMenuFramework/`
+with its license and an `ORIGEM.md`.
+
 ## What the original development tree does differently, and why you do not need it
 
 Development happens inside a Mod Organizer 2 instance, where this repository

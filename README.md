@@ -2,24 +2,27 @@
 
 **A Modern Interface for RaceMenu**
 
-Lifecast is a modern interface for RaceMenu's character editor. It draws its panel with either Prisma UI or Magelight UI, and ships one download for each.
+Lifecast is a modern interface for RaceMenu's character editor. It draws its panel with Prisma UI, with Magelight UI, or with SKSE Menu Framework, and ships one download for each.
 
-**Status: 1.5.0.** Version 1.4.0, the last one built on Meridian UI, stays on
+**Status: 1.6.0.** Version 1.4.0, the last one built on Meridian UI, stays on
 [Nexus Mods](https://www.nexusmods.com/skyrimspecialedition/mods/193940) as an old file. Bug reports
 go to the Bugs tab there, or to this repository's issues.
 
 ## Requirements
 
-Every download needs SKSE, Address Library for SKSE Plugins, RaceMenu and Media Keys Fix (without it the keyboard does not reach the panel, so the name field and the search boxes receive no keys). On top of that, pick **one** download and install the framework it names:
+Every download needs SKSE, Address Library for SKSE Plugins and RaceMenu. On top of that, pick **one** download and install what it names:
 
 | Download | Also requires |
 |---|---|
-| Lifecast - Prisma UI | Prisma UI |
-| Lifecast - Magelight UI | Magelight UI |
+| Lifecast - Prisma UI | Prisma UI and Media Keys Fix |
+| Lifecast - Magelight UI | Magelight UI and Media Keys Fix |
+| Lifecast - SKSE Menu Framework | SKSE Menu Framework (Media Keys Fix is optional) |
 
-Both carry the same `Lifecast.dll` and the same panel. They differ in where the panel is placed, and the folder that is present is what picks the framework in game. Do not install both.
+All three carry the same `Lifecast.dll`. The Prisma UI and Magelight UI downloads also carry the same web panel and differ in where it is placed; the folder that is present is what picks the framework in game. The SKSE Menu Framework download has no web panel: the DLL draws the interface itself, and a small marker file in the download tells it which framework this install is for. Do not install more than one.
 
-**Shortcuts of other mods firing while you type?** With the name or search field active, the Prisma UI download still lets a hotkey from another mod fire (a limit of Prisma UI, measured). The Magelight UI download does not, and it also composes dead keys natively. If that bites you, use the Magelight UI download.
+Media Keys Fix matters for the first two: without it the keyboard does not reach the web panel, so the name field and the search boxes receive no keys. The SKSE Menu Framework download does not need it; with it installed, the DLL composes dead keys (accents typed as two key presses) itself.
+
+**Shortcuts of other mods firing while you type?** With the name or search field active, the Prisma UI and SKSE Menu Framework downloads still let a hotkey from another mod fire (a limit of those frameworks, measured). The Magelight UI download does not, and it also composes dead keys natively. If that bites you, use the Magelight UI download.
 
 **A crash with SMP when you turn the comparison view on?** Install the SMP-NPC crash fix and
 see if it goes away. The comparison view copies the player's face onto a second figure with
