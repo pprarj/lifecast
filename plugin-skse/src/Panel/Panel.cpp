@@ -11,6 +11,10 @@
 #include "Panel/PrismaBackend.h"
 #include "Version.h"
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 namespace Lifecast::Panel
 {
 	namespace
@@ -39,6 +43,64 @@ namespace Lifecast::Panel
 		// whether it was said this game session.
 		std::string g_notice;
 		bool        g_noticed = false;
+
+		// A HUD message sent while the load's Loading or Fader Menu is still up
+		// is lost: sent at kPostLoadGame, or when the Loading Menu closed, it
+		// never showed; sent half a second after the Fader Menu closed, it did
+		// (1.5 E2b conserto, D280). So the notice waits for the fade, and goes
+		// out a moment after the last of the two menus has closed.
+		std::atomic_bool          g_noticePending = false;
+		constexpr auto            kNoticeDelay = std::chrono::milliseconds(1000);
+
+		void ShowNotice()
+		{
+			if (g_noticed || !g_noticePending) {
+				return;
+			}
+			auto* ui = RE::UI::GetSingleton();
+			if (ui && (ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME) || ui->IsMenuOpen(RE::FaderMenu::MENU_NAME))) {
+				// The next close brings it back here.
+				return;
+			}
+			g_noticePending = false;
+			g_noticed = true;
+			RE::SendHUDMessage::ShowHUDMessage(g_notice.c_str());
+			spdlog::info("[panel] on-screen notice, once this game session, after the load's fade: \"{}\"", g_notice);
+		}
+
+		// Any thread. The notice is shown from the game thread, a moment later.
+		void ShowNoticeSoon()
+		{
+			std::thread([]() {
+				std::this_thread::sleep_for(kNoticeDelay);
+				if (auto* tasks = SKSE::GetTaskInterface()) {
+					tasks->AddTask([]() { ShowNotice(); });
+				}
+			}).detach();
+		}
+
+		class FadeSink final : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+		{
+		public:
+			static FadeSink* GetSingleton()
+			{
+				static FadeSink s_instance;
+				return &s_instance;
+			}
+
+			RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event,
+				RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+			{
+				if (a_event && !a_event->opening && g_noticePending &&
+					(a_event->menuName == RE::LoadingMenu::MENU_NAME || a_event->menuName == RE::FaderMenu::MENU_NAME)) {
+					ShowNoticeSoon();
+				}
+				return RE::BSEventNotifyControl::kContinue;
+			}
+
+		private:
+			FadeSink() = default;
+		};
 
 		// The Switcher's swap to RaceMenu, for a backend whose page hears the
 		// exit chord itself (Magelight).
@@ -208,6 +270,11 @@ namespace Lifecast::Panel
 		} else {
 			spdlog::warn("{}", line);
 		}
+
+		// The notice waits for the load's fade (ShowNotice).
+		if (auto* ui = RE::UI::GetSingleton()) {
+			ui->AddEventSink<RE::MenuOpenCloseEvent>(FadeSink::GetSingleton());
+		}
 	}
 
 	bool HasBackend()
@@ -217,12 +284,15 @@ namespace Lifecast::Panel
 
 	void OnGameLoaded()
 	{
-		if (!g_chosen || g_backend || g_noticed || g_notice.empty()) {
+		if (!g_chosen || g_backend || g_noticed || g_notice.empty() || g_noticePending) {
 			return;
 		}
-		g_noticed = true;
-		RE::SendHUDMessage::ShowHUDMessage(g_notice.c_str());
-		spdlog::info("[panel] on-screen notice, once this game session: \"{}\"", g_notice);
+		// Not now: the load is still fading in (see ShowNotice). A close of
+		// the Loading or Fader Menu brings it, and so does this, if neither
+		// is up any more.
+		g_noticePending = true;
+		spdlog::info("[panel] on-screen notice waits for the load's fade: \"{}\"", g_notice);
+		ShowNoticeSoon();
 	}
 
 	void SetExitHandler(void (*a_handler)())

@@ -59,7 +59,9 @@ namespace Lifecast::Panel
 	bool HasBackend();
 
 	// A game was loaded or started: with no backend, the on-screen notice is
-	// shown, the first time only. Call on the game thread.
+	// shown, the first time only, once the load has faded in (a HUD message
+	// sent while the Loading or Fader Menu is up is lost). Call on the game
+	// thread.
 	void OnGameLoaded();
 
 	// What the Switcher does when the page itself heard the exit chord
