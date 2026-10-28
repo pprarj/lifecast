@@ -101,7 +101,11 @@ namespace Lifecast::Panel::Smf
 		float             g_dragAcc = 0.0f;
 		Clock::time_point g_dragSent{};
 		Clock::time_point g_sliderSent{};
-		bool              g_zoomedIn = false;
+		// RaceMenu's zoom is a toggle the DLL asks for (Stage.cpp OnZoom) and
+		// cannot read back, so the view keeps no guess of it: one neutral label,
+		// and the wheel toggles whatever its direction (D290).
+		std::uint32_t     g_zooms = 0;
+		Clock::time_point g_wheelZoomAt{};
 		float             g_frameRight = -1.0f;
 
 		// Where the widgets were last frame, screen pixels, for the state
@@ -328,9 +332,9 @@ namespace Lifecast::Panel::Smf
 				if (IG::Button("Farther")) {
 					Send("stage-move", { { "distance", kDistanceStep } });
 				}
-			} else if (IG::Button(g_zoomedIn ? "Zoom out" : "Zoom in")) {
+			} else if (IG::Button("Zoom##stage")) {
 				Send("stage-zoom", { { "from", "button" } });
-				g_zoomedIn = !g_zoomedIn;
+				++g_zooms;
 			}
 			if (!g_stage.free) {
 				Rect("zoom");
@@ -338,7 +342,6 @@ namespace Lifecast::Panel::Smf
 			IG::SameLine();
 			if (IG::Button("Reset##stage")) {
 				Send("stage-reset");
-				g_zoomedIn = false;
 			}
 			Rect("reset");
 			IG::SameLine();
@@ -462,11 +465,14 @@ namespace Lifecast::Panel::Smf
 				if (g_stage.free) {
 					Send("stage-move", { { "distance", -a_io->MouseWheel * kDistanceStep } });
 				} else {
-					const bool in = a_io->MouseWheel > 0.0f;
-					if (in != g_zoomedIn) {
+					// One toggle per wheel gesture: the notches of one turn arrive
+					// over several frames, and RaceMenu's swap takes longer than this.
+					const auto now = Clock::now();
+					if (now - g_wheelZoomAt >= std::chrono::milliseconds(450)) {
 						Send("stage-zoom", { { "from", "wheel" } });
-						g_zoomedIn = in;
+						++g_zooms;
 					}
+					g_wheelZoomAt = now;
 				}
 			}
 		}
@@ -661,9 +667,9 @@ namespace Lifecast::Panel::Smf
 	{
 		std::lock_guard l(g_mx);
 		spdlog::info("[smf] view {}: visible {}, card {}, form {}, sliders {} in {} tabs (ready {}), stage ready {} free {} "
-					 "turn {:.1f} distance {:.1f}, zoomed in {} | received {}, not drawn {}, sent {}",
+					 "turn {:.1f} distance {:.1f}, zoom asked {} | received {}, not drawn {}, sent {}",
 			a_what, g_visible, g_card, g_hybrid ? "hybrid" : "all", g_sliders.size(), g_tabs.size(), g_slidersReady,
-			g_stage.ready, g_stage.free, g_stage.turn, g_stage.distance, g_zoomedIn, g_received, g_ignored, g_sent);
+			g_stage.ready, g_stage.free, g_stage.turn, g_stage.distance, g_zooms, g_received, g_ignored, g_sent);
 		spdlog::info("[smf] view layout: {}", g_lastLayout.empty() ? std::string("not drawn yet") : g_lastLayout);
 	}
 }
