@@ -4,6 +4,7 @@
 #include "Panel/Smf/View.h"
 
 #include "Panel/Smf/Common.h"
+#include "Panel/Smf/Control.h"
 #include "Panel/Smf/DeadKeys.h"
 #include "Panel/Smf/Face.h"
 #include "Panel/Smf/History.h"
@@ -19,9 +20,11 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <mutex>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -37,8 +40,14 @@ namespace Lifecast::Panel::Smf
 		// drag, degrees per button press, units per button press, and how
 		// often a drag is sent.
 		constexpr float kTurnPerPx = 0.4f;
+		constexpr float kLiftPerPx = 0.3f;
+		constexpr float kPanPerPx = 0.3f;
+		constexpr float kTiltPerPx = 0.1f;
 		constexpr float kTurnStep = 15.0f;
 		constexpr float kDistanceStep = 10.0f;
+		constexpr float kLiftStep = 10.0f;
+		constexpr float kTiltStep = 5.0f;
+		constexpr float kNear = 0.01f;
 		constexpr auto  kSendEvery = std::chrono::milliseconds(50);
 
 		struct Slider
@@ -67,13 +76,38 @@ namespace Lifecast::Panel::Smf
 			std::vector<std::size_t> rows;
 		};
 
+		// The "stage" message (Stage.cpp State), as stage.js reads it.
 		struct StageState
 		{
 			bool        ready = false;
 			bool        free = false;
+			bool        forced = false;  // the comparison holds the free camera on
+			bool        lock = true;     // absent is on, as stage.js reads it
+			bool        tilt = false;    // the camera has a node to tilt by
 			double      turn = 0.0;
 			double      distance = 0.0;
+			double      lift = 0.0;
+			double      pan = 0.0;
+			double      tiltDeg = 0.0;
+			double      minDistance = 0.0;
+			double      maxDistance = 0.0;
+			double      liftMin = 0.0;
+			double      liftMax = 0.0;
+			double      tiltMax = 0.0;
+			json        tuning;  // development builds only (LIFECAST_TUNING)
+			json        tuningDefaults;
 			std::string why;
+		};
+
+		// A drag in the stage frame (stage.js pointerdown): what it moves.
+		enum class Drag
+		{
+			kNone,
+			kTurn,
+			kLift,
+			kTilt,
+			kCopy,
+			kCopyMove
 		};
 
 		// The model. Written by Receive, read by Draw; both on the game thread
@@ -95,6 +129,11 @@ namespace Lifecast::Panel::Smf
 		bool                                      g_needDrawn = false;
 		json                                      g_categories = json::array();
 		StageState                                g_stage;
+		bool                                      g_stageVisible = true;  // "stage-visible"
+		Clock::time_point                         g_laltZoomAt{};
+		Box                                       g_popup;
+		bool                                      g_havePopup = false;
+		bool                                      g_inPopup = false;
 		std::uint32_t                             g_received = 0;
 		std::uint32_t                             g_ignored = 0;
 
@@ -119,9 +158,29 @@ namespace Lifecast::Panel::Smf
 
 		// Render-only.
 		char              g_search[128] = {};
-		bool              g_dragging = false;
-		float             g_dragAcc = 0.0f;
+		Drag              g_drag = Drag::kNone;
+		int               g_dragButton = 0;
+		bool              g_dragFromGame = false;
+		float             g_accTurn = 0.0f;
+		float             g_accLift = 0.0f;
+		float             g_accPan = 0.0f;
+		float             g_accTilt = 0.0f;
+		float             g_accCopyTurn = 0.0f;
+		float             g_accAcross = 0.0f;
+		float             g_accDepth = 0.0f;
 		Clock::time_point g_dragSent{};
+		std::uint32_t     g_drags = 0;
+		std::uint32_t     g_gameDrags = 0;
+		std::uint32_t     g_wheels = 0;
+
+		// The game's mouse under the hybrid form (D310), written by the
+		// backend's input sink and read once a frame by the stage. Button bits:
+		// 1 left, 2 right.
+		std::atomic_int g_gmDx = 0;
+		std::atomic_int g_gmDy = 0;
+		std::atomic_int g_gmDown = 0;
+		std::atomic_int g_gmUp = 0;
+		std::atomic_int g_gmWheel = 0;  // notches, up positive
 		Clock::time_point g_sliderSent{};
 		// RaceMenu's zoom is a toggle the DLL asks for (Stage.cpp OnZoom) and
 		// cannot read back, so the view keeps no guess of it: one neutral label,
@@ -301,6 +360,7 @@ namespace Lifecast::Panel::Smf
 			Send("racemenu-categories-get");
 			Send("sliders-get");
 			Send("stage-get");
+			Control::Ask();
 			Face::Ask();
 			Skin::Ask();
 			g_lookAfterFilm = false;
@@ -337,56 +397,147 @@ namespace Lifecast::Panel::Smf
 			IG::End();
 		}
 
-		// The bar over the stage (stage.js): turn, then the camera.
+		// One button of the stage bar; disabled when a_off (at its limit, or
+		// held by the comparison). True when clicked.
+		bool StageButton(const char* a_label, const char* a_rect, bool a_off, const char* a_tip)
+		{
+			IG::BeginDisabled(a_off);
+			const bool clicked = IG::Button(a_label);
+			Rect(a_rect);
+			IG::SetItemTooltip("%s", a_tip);
+			IG::EndDisabled();
+			return clicked;
+		}
+
+		void Bar()
+		{
+			IG::SameLine();
+			IG::TextDisabled("|");
+			IG::SameLine();
+		}
+
+		// The tuning knobs, only when a development DLL sends "tuning"
+		// (stage.js renderTuning): one field per number, sent when it is left.
+		void DrawTuning()
+		{
+			if (!g_stage.tuning.is_object()) {
+				return;
+			}
+			IG::AlignTextToFramePadding();
+			IG::TextDisabled("Tuning");
+			for (const auto& [k, v] : g_stage.tuning.items()) {
+				if (!v.is_number()) {
+					continue;
+				}
+				IG::SameLine();
+				IG::SetNextItemWidth(Theme::Px(64.0f));
+				float f = v.get<float>();
+				const std::string id = k + "##tune";
+				IG::InputFloat(id.c_str(), &f, 0.0f, 0.0f, "%.1f");
+				if (IG::IsItemDeactivatedAfterEdit() && std::isfinite(f)) {
+					Send("stage-tune", { { k, f } });
+				}
+			}
+			IG::SameLine();
+			if (IG::Button("Reset all##tune") && g_stage.tuningDefaults.is_object()) {
+				Send("stage-tune", g_stage.tuningDefaults);
+			}
+		}
+
+		// The bar over the stage (stage.js, control.js): Character Control on
+		// the first row (D130), the camera on the second, with undo and redo.
 		void DrawStage()
 		{
+			Control::Draw(g_frameLeft, g_frameRight);
 			if (!g_stage.ready) {
-				IG::TextDisabled("Character view: %s", g_stage.why.empty() ? "not ready" : g_stage.why.c_str());
+				IG::TextDisabled("Character view unavailable%s%s", g_stage.why.empty() ? "" : ": ", g_stage.why.c_str());
+				History::DrawButtons();
+				return;
 			}
+			const auto& s = g_stage;
 			IG::AlignTextToFramePadding();
 			IG::TextDisabled("Turn");
 			IG::SameLine();
-			if (IG::Button("<##turn-left")) {
+			if (StageButton("<##turn-left", "turn-left", false, "Turn left")) {
 				Send("stage-move", { { "turn", -kTurnStep } });
 			}
-			Rect("turn-left");
 			IG::SameLine();
-			if (IG::Button(">##turn-right")) {
+			if (StageButton(">##turn-right", "turn-right", false, "Turn right")) {
 				Send("stage-move", { { "turn", kTurnStep } });
 			}
-			Rect("turn-right");
-			IG::SameLine();
-			IG::TextDisabled("|");
-			IG::SameLine();
+			Bar();
 			IG::TextDisabled("Camera");
 			IG::SameLine();
-			if (g_stage.free) {
-				if (IG::Button("Closer")) {
+			const std::string mode =
+				std::string("Free camera: ") + (s.free ? "on" : "off") + (s.forced ? " (comparison)" : "") + "##mode";
+			if (StageButton(mode.c_str(), "mode", s.forced, "Standard is RaceMenu's two positions; free is every move")) {
+				Send("stage-mode", { { "free", !s.free } });
+			}
+			if (s.free) {
+				IG::SameLine();
+				const std::string lock = std::string("Lock on character: ") + (s.lock ? "on" : "off") + "##lock";
+				if (StageButton(lock.c_str(), "lock", s.forced,
+						"On, the camera keeps the character framed as she moves; off, it stays where you put it")) {
+					Send("stage-lock", { { "on", !s.lock } });
+				}
+				Bar();
+				IG::TextDisabled("Zoom");
+				IG::SameLine();
+				if (StageButton("+##closer", "closer", s.distance <= s.minDistance + kNear, "Closer")) {
 					Send("stage-move", { { "distance", -kDistanceStep } });
 				}
 				IG::SameLine();
-				if (IG::Button("Farther")) {
+				if (StageButton("-##farther", "farther", s.distance >= s.maxDistance - kNear, "Farther")) {
 					Send("stage-move", { { "distance", kDistanceStep } });
 				}
-			} else if (IG::Button("Zoom##stage")) {
-				Send("stage-zoom", { { "from", "button" } });
-				++g_zooms;
+				Bar();
+				IG::TextDisabled("Height");
+				IG::SameLine();
+				if (StageButton("Up##lift-up", "lift-up", s.lift >= s.liftMax - kNear, "Camera up")) {
+					Send("stage-move", { { "lift", kLiftStep } });
+				}
+				IG::SameLine();
+				if (StageButton("Down##lift-down", "lift-down", s.lift <= s.liftMin + kNear, "Camera down")) {
+					Send("stage-move", { { "lift", -kLiftStep } });
+				}
+				if (s.tilt) {
+					Bar();
+					IG::TextDisabled("Tilt");
+					IG::SameLine();
+					if (StageButton("Up##tilt-up", "tilt-up", s.lock || s.tiltDeg >= s.tiltMax - kNear, "Tilt one way")) {
+						Send("stage-move", { { "tilt", kTiltStep } });
+					}
+					IG::SameLine();
+					if (StageButton("Down##tilt-down", "tilt-down", s.lock || s.tiltDeg <= -s.tiltMax + kNear,
+							"Tilt the other way")) {
+						Send("stage-move", { { "tilt", -kTiltStep } });
+					}
+				}
+				IG::SameLine();
+				if (StageButton("Reframe##stage", "reset", false, "Back to the view the menu opened with")) {
+					g_accTurn = g_accLift = g_accPan = g_accTilt = 0.0f;
+					Send("stage-reset");
+				}
+			} else {
+				IG::SameLine();
+				if (StageButton("Zoom##stage", "zoom", false, "RaceMenu's own zoom, far and near (LAlt)")) {
+					Send("stage-zoom", { { "from", "button" } });
+					++g_zooms;
+				}
 			}
-			if (!g_stage.free) {
-				Rect("zoom");
+			IG::AlignTextToFramePadding();
+			if (s.free) {
+				const std::string tilt = s.tilt ? fmt::format("  |  tilt {:.0f} deg", s.tiltDeg) : std::string();
+				IG::TextDisabled("turn %.0f deg  |  distance %.0f  |  height %.0f  |  pan %.0f%s", s.turn, s.distance, s.lift,
+					s.pan, tilt.c_str());
+			} else {
+				IG::TextDisabled("turn %.0f deg  |  RaceMenu camera", s.turn);
 			}
-			IG::SameLine();
-			if (IG::Button("Reset##stage")) {
-				Send("stage-reset");
-			}
-			Rect("reset");
-			IG::SameLine();
-			IG::TextDisabled("turn %.0f, distance %.0f", g_stage.turn, g_stage.distance);
+			Rect("readout");
 			// Undo and redo (D130: on this bar, away from Finish on the belt; D303)
-			IG::SameLine();
-			IG::TextDisabled("|");
-			IG::SameLine();
+			Bar();
 			History::DrawButtons();
+			DrawTuning();
 		}
 
 		// Puts a slider back from the history: its value here, and the same
@@ -645,46 +796,202 @@ namespace Lifecast::Panel::Smf
 			}
 		}
 
-		// The stage under the "all" form: a drag or the wheel outside the
-		// panel, which only the window sees while it holds the input.
+		// stage.js pointerdown: what a press with this button and these keys
+		// drags. a_button: 0 left, 1 right.
+		Drag PickDrag(int a_button, bool a_shift, bool a_ctrl)
+		{
+			if (!g_stage.ready || !g_stageVisible) {
+				return Drag::kNone;
+			}
+			if (Control::CompareOn() && a_shift && !a_ctrl) {
+				return a_button == 0 ? Drag::kCopy : Drag::kCopyMove;
+			}
+			if (!g_stage.free) {
+				return a_button == 0 && !a_ctrl ? Drag::kTurn : Drag::kNone;
+			}
+			if (a_button == 1) {
+				return Drag::kLift;
+			}
+			return a_ctrl ? Drag::kTilt : Drag::kTurn;
+		}
+
+		const char* DragName(Drag a_d)
+		{
+			switch (a_d) {
+			case Drag::kTurn:
+				return "turn";
+			case Drag::kLift:
+				return "lift";
+			case Drag::kTilt:
+				return "tilt";
+			case Drag::kCopy:
+				return "copy";
+			case Drag::kCopyMove:
+				return "copy-move";
+			default:
+				return "none";
+			}
+		}
+
+		void DragStart(int a_button, bool a_shift, bool a_ctrl, bool a_fromGame)
+		{
+			const Drag d = PickDrag(a_button, a_shift, a_ctrl);
+			if (d == Drag::kNone) {
+				return;
+			}
+			g_drag = d;
+			g_dragButton = a_button;
+			g_dragFromGame = a_fromGame;
+			g_dragSent = Clock::now();
+			++g_drags;
+			if (a_fromGame) {
+				++g_gameDrags;
+			}
+			spdlog::info("[smf] view: stage drag {} (button {}, shift {}, ctrl {}, from {})", DragName(d), a_button, a_shift,
+				a_ctrl, a_fromGame ? "the game's input" : "the window");
+		}
+
+		// stage.js pointermove: pixels into what the drag moves (move, moveCopy,
+		// moveCopyPlace), gathered until the next send.
+		void DragMove(float a_dx, float a_dy)
+		{
+			switch (g_drag) {
+			case Drag::kTurn:
+				g_accTurn += a_dx * kTurnPerPx;
+				break;
+			case Drag::kLift:
+				// the view moves with the cursor, so the camera the other way (E4, Fase 6.5)
+				g_accLift += a_dy * kLiftPerPx;
+				g_accPan += -a_dx * kPanPerPx;
+				break;
+			case Drag::kTilt:
+				// with the lock on the DLL holds the head's height by tilt, so a hand tilt would be taken back
+				if (g_stage.tilt && !g_stage.lock) {
+					g_accTilt += -a_dy * kTiltPerPx;
+				}
+				break;
+			case Drag::kCopy:
+				// the copy's angle is the other way round on screen from the character's
+				g_accCopyTurn -= a_dx * kTurnPerPx;
+				break;
+			case Drag::kCopyMove:
+				g_accAcross += a_dx * kPanPerPx;
+				g_accDepth += -a_dy * kPanPerPx;
+				break;
+			default:
+				break;
+			}
+		}
+
+		// stage.js flush: one message of each kind that moved.
+		void DragFlush()
+		{
+			if (g_accCopyTurn != 0.0f) {
+				Send("compare-turn", { { "deg", (std::clamp)(g_accCopyTurn, -180.0f, 180.0f) } });
+				g_accCopyTurn = 0.0f;
+			}
+			if (g_accAcross != 0.0f || g_accDepth != 0.0f) {
+				Send("compare-move", { { "across", g_accAcross }, { "depth", g_accDepth } });
+				g_accAcross = g_accDepth = 0.0f;
+			}
+			json m = json::object();
+			const std::pair<const char*, float*> keys[] = { { "turn", &g_accTurn }, { "lift", &g_accLift },
+				{ "pan", &g_accPan }, { "tilt", &g_accTilt } };
+			for (const auto& [k, v] : keys) {
+				if (*v != 0.0f) {
+					m[k] = *v;
+					*v = 0.0f;
+				}
+			}
+			if (!m.empty()) {
+				Send("stage-move", m);
+			}
+			g_dragSent = Clock::now();
+		}
+
+		void DragTick(bool a_up)
+		{
+			if (a_up || Clock::now() - g_dragSent >= kSendEvery) {
+				DragFlush();
+			}
+			if (a_up) {
+				g_drag = Drag::kNone;
+			}
+		}
+
+		// The wheel in the stage: the distance in free, RaceMenu's zoom in
+		// standard (one toggle per gesture: its notches arrive over several
+		// frames, and the swap takes longer than that; D290).
+		void Wheel(float a_notches)
+		{
+			if (a_notches == 0.0f || !g_stage.ready || !g_stageVisible) {
+				return;
+			}
+			++g_wheels;
+			if (g_stage.free) {
+				Send("stage-move", { { "distance", -a_notches * kDistanceStep } });
+				return;
+			}
+			const auto now = Clock::now();
+			if (now - g_wheelZoomAt >= std::chrono::milliseconds(450)) {
+				Send("stage-zoom", { { "from", "wheel" } });
+				++g_zooms;
+			}
+			g_wheelZoomAt = now;
+		}
+
+		bool KeyHeld(int a_vk)
+		{
+			return (::GetAsyncKeyState(a_vk) & 0x8000) != 0;
+		}
+
+		// The stage's drags and wheel (D310). Under "all" the window holds the
+		// input and the stage reads ImGui; under "hybrid" a press outside the
+		// windows goes to the game, and the stage reads what the backend's
+		// input sink heard - the owner stays the game (D291).
 		void StageInput(IG::ImGuiIO* a_io, bool a_holds)
 		{
-			if (!a_holds || g_hybrid) {
-				g_dragging = false;
+			const int dx = g_gmDx.exchange(0);
+			const int dy = g_gmDy.exchange(0);
+			const int down = g_gmDown.exchange(0);
+			const int up = g_gmUp.exchange(0);
+			const int wheel = g_gmWheel.exchange(0);
+			if (g_hybrid) {
+				if (g_drag != Drag::kNone && !g_dragFromGame) {
+					// a drag the window started, ended by the form changing under it
+					DragTick(true);
+				}
+				if (g_drag == Drag::kNone && (down & 3) != 0) {
+					DragStart((down & 1) ? 0 : 1, KeyHeld(VK_SHIFT), KeyHeld(VK_CONTROL), true);
+				}
+				if (g_drag != Drag::kNone) {
+					DragMove(static_cast<float>(dx), static_cast<float>(dy));
+					DragTick((up & (1 << g_dragButton)) != 0);
+				}
+				Wheel(static_cast<float>(wheel));
+				return;
+			}
+			if (!a_holds) {
+				if (g_drag != Drag::kNone) {
+					DragTick(true);
+				}
 				return;
 			}
 			const bool over = IG::IsWindowHovered(IG::ImGuiHoveredFlags_AnyWindow);
-			if (IG::IsMouseClicked(0) && !over) {
-				g_dragging = true;
-				g_dragAcc = 0.0f;
-				g_dragSent = Clock::now();
-			}
-			if (g_dragging) {
-				g_dragAcc += a_io->MouseDelta.x;
-				const bool up = !IG::IsMouseDown(0);
-				const auto now = Clock::now();
-				if (g_dragAcc != 0.0f && (up || now - g_dragSent >= kSendEvery)) {
-					Send("stage-move", { { "turn", g_dragAcc * kTurnPerPx } });
-					g_dragAcc = 0.0f;
-					g_dragSent = now;
-				}
-				if (up) {
-					g_dragging = false;
-				}
-			}
-			if (!over && a_io->MouseWheel != 0.0f) {
-				if (g_stage.free) {
-					Send("stage-move", { { "distance", -a_io->MouseWheel * kDistanceStep } });
-				} else {
-					// One toggle per wheel gesture: the notches of one turn arrive
-					// over several frames, and RaceMenu's swap takes longer than this.
-					const auto now = Clock::now();
-					if (now - g_wheelZoomAt >= std::chrono::milliseconds(450)) {
-						Send("stage-zoom", { { "from", "wheel" } });
-						++g_zooms;
+			if (g_drag == Drag::kNone && !over) {
+				for (int b = 0; b < 2; ++b) {
+					if (IG::IsMouseClicked(b)) {
+						DragStart(b, a_io->KeyShift, a_io->KeyCtrl, false);
+						break;
 					}
-					g_wheelZoomAt = now;
 				}
+			}
+			if (g_drag != Drag::kNone) {
+				DragMove(a_io->MouseDelta.x, a_io->MouseDelta.y);
+				DragTick(!IG::IsMouseDown(g_dragButton));
+			}
+			if (!over) {
+				Wheel(a_io->MouseWheel);
 			}
 		}
 
@@ -737,10 +1044,25 @@ namespace Lifecast::Panel::Smf
 			}
 			const auto a = IG::GetItemRectMin();
 			const auto b = IG::GetItemRectMax();
-			if (b.y > g_clipBottom) {
+			if (b.y > g_clipBottom && !g_inPopup) {
 				return;
 			}
 			g_layout.push_back(fmt::format("{} {:.0f},{:.0f},{:.0f},{:.0f}", a_name, a.x, a.y, b.x, b.y));
+		}
+
+		void Popup(const char* a_name)
+		{
+			if (IG::IsWindowAppearing()) {
+				LayoutSoon();
+			}
+			g_popup = WindowBox(a_name);
+			g_havePopup = true;
+			g_inPopup = true;
+		}
+
+		void PopupEnd()
+		{
+			g_inPopup = false;
 		}
 
 		void Send(std::string_view a_type, json a_data)
@@ -839,12 +1161,50 @@ namespace Lifecast::Panel::Smf
 				}
 			}
 		} else if (type == "stage") {
-			g_stage.ready = data.value("ready", false);
-			g_stage.why = data.value("why", std::string());
-			g_stage.free = data.value("free", false);
-			g_stage.turn = data.value("turn", 0.0);
-			g_stage.distance = data.value("distance", 0.0);
-		} else if (!Face::Receive(type, data) && !Skin::Receive(type, data) && !Presets::Receive(type, data)) {
+			const auto num = [](const json& a_o, const char* a_k) {
+				const auto it = a_o.is_object() ? a_o.find(a_k) : a_o.end();
+				return it != a_o.end() && it->is_number() ? it->get<double>() : 0.0;
+			};
+			const auto flag = [&data](const char* a_k, bool a_fallback) {
+				const auto it = data.is_object() ? data.find(a_k) : data.end();
+				return it != data.end() && it->is_boolean() ? it->get<bool>() : a_fallback;
+			};
+			auto&      s = g_stage;
+			const auto shape = std::make_tuple(s.ready, s.free, s.forced, s.lock, s.tilt);
+			s.ready = flag("ready", false);
+			s.why = data.value("why", std::string());
+			s.free = flag("free", false);
+			s.forced = flag("forced", false);
+			s.lock = flag("lock", true);
+			s.tilt = flag("tilt", false);
+			s.turn = num(data, "turn");
+			s.distance = num(data, "distance");
+			s.lift = num(data, "lift");
+			s.pan = num(data, "pan");
+			s.tiltDeg = num(data, "tiltDeg");
+			const json lim = data.contains("limits") ? data["limits"] : json::object();
+			s.minDistance = num(lim, "minDistance");
+			s.maxDistance = num(lim, "maxDistance");
+			s.liftMin = num(lim, "liftMin");
+			s.liftMax = num(lim, "liftMax");
+			s.tiltMax = num(lim, "tiltMax");
+			s.tuning = data.contains("tuning") ? data["tuning"] : json();
+			s.tuningDefaults = data.contains("tuningDefaults") ? data["tuningDefaults"] : json();
+			if (shape != std::make_tuple(s.ready, s.free, s.forced, s.lock, s.tilt)) {
+				Common::LayoutSoon();
+			}
+		} else if (type == "stage-visible") {
+			g_stageVisible = data.value("on", true);
+		} else if (type == "key-lalt") {
+			// stage.js: LAlt swaps far and near in standard, at most once in 400 ms
+			const auto now = Clock::now();
+			if (g_stage.ready && !g_stage.free && now - g_laltZoomAt >= std::chrono::milliseconds(400)) {
+				g_laltZoomAt = now;
+				Send("stage-zoom", { { "from", "dll-lalt" } });
+				++g_zooms;
+			}
+		} else if (!Control::Receive(type, data) && !Face::Receive(type, data) && !Skin::Receive(type, data) &&
+				   !Presets::Receive(type, data)) {
 			++g_ignored;
 		}
 		// A list stamp is answered within seconds (Core/ListSig.cpp); the
@@ -895,10 +1255,13 @@ namespace Lifecast::Panel::Smf
 		const float stageB = beltY - 2.0f * gap;
 		const auto  border = IG::ColorConvertFloat4ToU32(Theme::Color::PanelBorder());
 		g_layout.clear();
+		g_havePopup = false;
 
 		// The stage: a frame only (.stage), on the background list - under every window.
-		IG::ImDrawListManager::AddRect(IG::GetBackgroundDrawList(), IG::ImVec2{ stageL, stageT }, IG::ImVec2{ stageR, stageB },
-			IG::ColorConvertFloat4ToU32(Theme::Color::StageBorder()), 6.0f, 0, 1.0f);
+		if (g_stageVisible) {
+			IG::ImDrawListManager::AddRect(IG::GetBackgroundDrawList(), IG::ImVec2{ stageL, stageT },
+				IG::ImVec2{ stageR, stageB }, IG::ColorConvertFloat4ToU32(Theme::Color::StageBorder()), 6.0f, 0, 1.0f);
+		}
 
 		// The small panel.
 		{
@@ -999,6 +1362,9 @@ namespace Lifecast::Panel::Smf
 			DrawStage();
 			IG::End();
 		}
+		if (g_havePopup) {
+			f.boxes[f.count++] = g_popup;
+		}
 
 		f.wantText = io->WantTextInput;
 		f.drawn = true;
@@ -1006,6 +1372,9 @@ namespace Lifecast::Panel::Smf
 		History::Keys(io->WantTextInput);
 		g_lastLayout = fmt::format("window {:.0f},{:.0f},{:.0f},{:.0f}; {}; {}; stage {:.0f},{:.0f},{:.0f},{:.0f}", f.boxes[0].x0,
 			f.boxes[0].y0, f.boxes[0].x1, f.boxes[0].y1, BoxText(f.boxes[1]), BoxText(f.boxes[2]), stageL, stageT, stageR, stageB);
+		if (g_havePopup) {
+			g_lastLayout += "; " + BoxText(g_popup);
+		}
 		for (const auto& e : g_layout) {
 			g_lastLayout += "; " + e;
 		}
@@ -1043,6 +1412,26 @@ namespace Lifecast::Panel::Smf
 		});
 	}
 
+	void GameMouseButton(std::uint32_t a_id, bool a_down)
+	{
+		if (a_id == 8 || a_id == 9) {
+			if (a_down) {
+				g_gmWheel += a_id == 8 ? 1 : -1;
+			}
+			return;
+		}
+		if (a_id > 1) {
+			return;
+		}
+		(a_down ? g_gmDown : g_gmUp) |= 1 << a_id;
+	}
+
+	void GameMouseMove(int a_dx, int a_dy)
+	{
+		g_gmDx += a_dx;
+		g_gmDy += a_dy;
+	}
+
 	bool Hybrid()
 	{
 		return g_hybrid;
@@ -1062,6 +1451,11 @@ namespace Lifecast::Panel::Smf
 			a_what, g_visible, g_card, g_hybrid ? "hybrid" : "all", g_sliders.size(), g_tabs.size(), g_slidersReady,
 			g_stage.ready, g_stage.free, g_stage.turn, g_stage.distance, g_zooms, g_received, g_ignored, g_sent);
 		spdlog::info("[smf] view {}: section {}", a_what, g_section);
+		spdlog::info("[smf] view stage ({}): ready {}, free {}, forced {}, lock {}, tilt {} ({:.1f} deg), turn {:.1f}, "
+					 "distance {:.1f}, lift {:.1f}, pan {:.1f}, visible {}, {} drag(s) ({} from the game's input), {} wheel(s)",
+			a_what, g_stage.ready, g_stage.free, g_stage.forced, g_stage.lock, g_stage.tilt, g_stage.tiltDeg, g_stage.turn,
+			g_stage.distance, g_stage.lift, g_stage.pan, g_stageVisible, g_drags, g_gameDrags, g_wheels);
+		Control::LogState(a_what);
 		Face::LogState(a_what);
 		Skin::LogState(a_what);
 		Presets::LogState(a_what);

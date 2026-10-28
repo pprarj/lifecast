@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace Lifecast::Panel::Smf
 {
 	// One of the view's windows on screen, in screen pixels.
@@ -29,11 +31,11 @@ namespace Lifecast::Panel::Smf
 	};
 
 	// What the view drew this frame: its windows (the small panel, the belt,
-	// the stage bar) and whether a field wants the keyboard. Read by the
+	// the stage bar, and the pose list while it is open) and whether a field wants the keyboard. Read by the
 	// input form, for which "inside" is inside any of the windows.
 	struct Frame
 	{
-		static constexpr int kMaxBoxes = 3;
+		static constexpr int kMaxBoxes = 4;
 
 		Box  boxes[kMaxBoxes];
 		int  count = 0;
@@ -66,6 +68,13 @@ namespace Lifecast::Panel::Smf
 
 	// Hands what Draw queued to the bridge, on a later game-thread task.
 	void Flush();
+
+	// The game's mouse, as the backend's input sink hears it: the stage reads
+	// its drags and wheel from here under the hybrid form, where a press
+	// outside the windows goes to the game (D310). a_id: 0 left, 1 right,
+	// 8 and 9 the wheel up and down. Any thread.
+	void GameMouseButton(std::uint32_t a_id, bool a_down);
+	void GameMouseMove(int a_dx, int a_dy);
 
 	// The "smfInput" setting as the view last heard it: true for "hybrid".
 	bool Hybrid();

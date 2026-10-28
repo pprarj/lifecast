@@ -14,6 +14,13 @@ namespace Lifecast::Panel::Smf::Common
 	// clicks by. Widgets out of view are left out.
 	void Rect(std::string_view a_name);
 
+	// Inside a popup the view opened (the pose list): while it is open it is
+	// one of the view's windows for the input form, as the three are, and its
+	// widgets are noted for the bench whatever the clip. PopupEnd before the
+	// popup ends.
+	void Popup(const char* a_name);
+	void PopupEnd();
+
 	// Logs the layout line a few frames from now, once what just changed
 	// (a section, a search, a rebuilt list) has been drawn.
 	void LayoutSoon();

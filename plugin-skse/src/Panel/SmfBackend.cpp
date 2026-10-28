@@ -258,6 +258,25 @@ namespace Lifecast::Panel
 			RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) override
 			{
 				g_inputAtMs = NowMs();
+				// D310: under the hybrid form a press outside the view's windows
+				// reaches the game, and the stage's drag is read from here. The
+				// event goes on to RaceMenu as it always did.
+				if (a_event && g_visible && Smf::Hybrid()) {
+					for (auto* e = *a_event; e; e = e->next) {
+						if (e->GetDevice() != RE::INPUT_DEVICES::kMouse) {
+							continue;
+						}
+						if (e->GetEventType() == RE::INPUT_EVENT_TYPE::kMouseMove) {
+							if (const auto* m = e->AsMouseMoveEvent()) {
+								Smf::GameMouseMove(m->mouseInputX, m->mouseInputY);
+							}
+						} else if (const auto* b = e->AsButtonEvent()) {
+							if (b->IsDown() || b->IsUp()) {
+								Smf::GameMouseButton(b->GetIDCode(), b->IsDown());
+							}
+						}
+					}
+				}
 				const auto dik = g_chordDik.load();
 				if (!a_event || !g_visible || !g_wantFocus || dik == 0) {
 					return RE::BSEventNotifyControl::kContinue;
