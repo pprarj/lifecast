@@ -163,6 +163,8 @@ namespace Lifecast::Panel
 		{
 		public:
 			const char* Name() const override { return "prisma"; }
+			const char* Framework() const override { return "Prisma UI"; }
+			const char* PanelFile() const override { return "Data\\PrismaUI\\views\\Lifecast\\index.html"; }
 
 			bool Available() override { return g_api != nullptr; }
 

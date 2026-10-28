@@ -59,7 +59,8 @@ namespace Lifecast::Core::Settings
 
 		bool IsBackend(const json& a_value)
 		{
-			return a_value.is_string() && (a_value == "auto" || a_value == "prisma" || a_value == "meridian");
+			return a_value.is_string() && (a_value == "auto" || a_value == "prisma" || a_value == "magelight" ||
+				a_value == "meridian");
 		}
 
 		const std::array<Key, 4> kKeys{ {

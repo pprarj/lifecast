@@ -73,9 +73,12 @@ namespace Lifecast::Core::MeridianLink
 		if (registered) {
 			spdlog::info("[meridian] listening to MeridianUI from kPostLoad");
 		} else {
-			spdlog::error(
+			// Not an error by itself: another framework may draw the panel.
+			// Panel::Choose() says it as an error when the "backend" setting
+			// asks for Meridian.
+			spdlog::info(
 				"[meridian] listening to MeridianUI from kPostLoad failed - "
-				"MeridianUI is not loaded; there will be no panel");
+				"MeridianUI is not loaded");
 		}
 	}
 

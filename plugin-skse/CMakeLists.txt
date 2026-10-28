@@ -3,8 +3,9 @@ cmake_minimum_required(VERSION 3.21)
 # ---------------------------------------------------------------------------
 # Lifecast - a modern interface for RaceMenu.
 #
-# The panel is drawn by one of two web UI frameworks, Prisma UI or Meridian UI,
-# chosen at run time (src/Panel/Panel.h); RaceMenu is reached through SKEE.
+# The panel is drawn by one of three web UI frameworks - Prisma UI, Magelight
+# UI or Meridian UI - chosen at run time (src/Panel/Panel.h); RaceMenu is
+# reached through SKEE.
 # ---------------------------------------------------------------------------
 
 project(
@@ -89,6 +90,7 @@ add_commonlibsse_plugin(
         src/Edit/Tints.cpp
         src/Edit/Undress.cpp
         src/Panel/Bridge.cpp
+        src/Panel/MagelightBackend.cpp
         src/Panel/MeridianBackend.cpp
         src/Panel/Pad.cpp
         src/Panel/Panel.cpp

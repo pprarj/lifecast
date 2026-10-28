@@ -8,7 +8,7 @@
 // native: it returns at once and never blocks the page. DLL to page arrives
 // as JSON text through window.Lifecast.on("message", fn).
 //
-// Two backends, one window.Lifecast:
+// Three backends, one window.Lifecast:
 //
 //   Meridian UI  installs window.Lifecast itself. The message is passed to
 //                send() as an OBJECT, not as JSON.stringify(...): Meridian
@@ -20,6 +20,13 @@
 //                built here over the two, with the same send/on shape; Prisma
 //                delivers the argument as it was passed, so send() turns the
 //                object into its JSON text and the DLL decodes it once.
+//   Magelight UI the same two globals as Prisma (the DLL registers them), and
+//                the argument arrives raw the same way. Told apart from
+//                Prisma by window.magelight, the host's own page object.
+//                While the page holds the keyboard the game hears no key, so
+//                the way back to RaceMenu is heard HERE: a function key goes
+//                to the DLL through lifecastChord, and the DLL decides
+//                whether it is the armed one.
 //
 // Nothing past this file knows which backend it runs on, except keyboard.js,
 // which corrects what each one gets wrong (LifecastBridge.backend()).
@@ -46,14 +53,20 @@ const LifecastBridge = (() => {
 
   const handlers = new Map();
   let attached = false;
-  let backend = null; // "meridian" | "prisma", once attached
+  let backend = null; // "meridian" | "prisma" | "magelight", once attached
   const onAttach = [];
 
-  // window.Lifecast on Prisma: the same two calls, over Prisma's globals.
-  function prismaShim() {
+  // window.Lifecast on Prisma and Magelight: the same two calls, over the
+  // two globals the DLL registers.
+  function globalsShim() {
     return {
       send(message) {
-        window.lifecastSend(JSON.stringify(message));
+        const text = JSON.stringify(message);
+        if (typeof window.lifecastSend === "function") {
+          window.lifecastSend(text);
+        } else {
+          window.magelight.send("lifecastSend", text);
+        }
       },
       on(name, fn) {
         if (name === EVENT_NAME) {
@@ -67,12 +80,19 @@ const LifecastBridge = (() => {
     const a = window.Lifecast;
     if (a && typeof a.send === "function" && typeof a.on === "function") {
       if (!backend) {
-        backend = a.prisma ? "prisma" : "meridian";
+        backend = a.magelight ? "magelight" : a.prisma ? "prisma" : "meridian";
       }
       return a;
     }
+    if (window.magelight && typeof window.magelight.send === "function") {
+      const shim = globalsShim();
+      shim.magelight = true;
+      window.Lifecast = shim;
+      backend = "magelight";
+      return shim;
+    }
     if (typeof window.lifecastSend === "function") {
-      const shim = prismaShim();
+      const shim = globalsShim();
       shim.prisma = true;
       window.Lifecast = shim;
       backend = "prisma";
@@ -80,6 +100,32 @@ const LifecastBridge = (() => {
     }
     return null;
   }
+
+  // Magelight only: F1-F12 seen by the page go to the DLL as the browser's
+  // keyCode (F1 = 112). Capture phase, first of all listeners, so no field
+  // of the page acts on the key. Only the armed key, while the panel holds
+  // the keyboard, does anything there.
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (backend !== "magelight" || e.repeat) {
+        return;
+      }
+      const m = /^F([1-9]|1[0-2])$/.exec(e.key || "");
+      if (!m) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      const code = String(111 + Number(m[1]));
+      if (typeof window.lifecastChord === "function") {
+        window.lifecastChord(code);
+      } else {
+        window.magelight.send("lifecastChord", code);
+      }
+    },
+    true
+  );
 
   function dispatch(text) {
     let message;
@@ -123,7 +169,8 @@ const LifecastBridge = (() => {
   return {
     PROTOCOL,
 
-    // "meridian" or "prisma" once the native side is there; null before.
+    // "meridian", "prisma" or "magelight" once the native side is there;
+    // null before.
     backend() {
       return backend;
     },

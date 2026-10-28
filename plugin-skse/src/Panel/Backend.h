@@ -3,9 +3,9 @@
 //
 // What the panel needs from a web UI framework, and nothing else. Panel.cpp
 // talks to one of these and never to a framework; each framework's types stay
-// inside its own .cpp (MeridianBackend.cpp, PrismaBackend.cpp). A third
-// framework is a third file and one more row in Panel.cpp's table - no caller
-// of Panel:: changes.
+// inside its own .cpp (PrismaBackend.cpp, MagelightBackend.cpp,
+// MeridianBackend.cpp). Another framework is another file and one more row in
+// Panel.cpp's table - no caller of Panel:: changes.
 //
 // Every call below is made on the game thread, and every callback a backend
 // receives from its framework reaches the rest of the Lifecast on the game
@@ -23,13 +23,26 @@ namespace Lifecast::Panel
 	class Backend
 	{
 	public:
-		// "prisma", "meridian": the value of the "backend" setting that forces
-		// this one, and the tag its log lines carry.
+		// "prisma", "magelight", "meridian": the value of the "backend" setting
+		// that forces this one, and the tag its log lines carry.
 		virtual const char* Name() const = 0;
+
+		// The framework's name as the player knows it ("Prisma UI"), for the
+		// log and the on-screen notice when it is missing.
+		virtual const char* Framework() const = 0;
+
+		// The page this backend opens, relative to the game folder. Present
+		// only in the package made for this backend: its presence is what
+		// makes the backend a candidate.
+		virtual const char* PanelFile() const = 0;
 
 		// The framework is loaded and answered its API. Read at kDataLoaded
 		// and after; false means this backend is never asked to create.
 		virtual bool Available() = 0;
+
+		// Another backend was chosen: let go of whatever was registered with
+		// the framework at startup. Called once, at the choice.
+		virtual void StandDown() {}
 
 		// Creates the page, hidden. Once: shown and hidden after that, never
 		// destroyed and re-created while the game runs. False when refused.

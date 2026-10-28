@@ -21,6 +21,10 @@
 //      on the next character. No doubled press was seen on Prisma, so 2 does
 //      not run there.
 //
+// Magelight UI:
+//   Nothing to correct: a dead key composes on its own (measured), so none of
+//   the three runs there - 3 would put a second accent on the letter.
+//
 // Everything happens in the page and applies to every text field in it.
 // Which backend is running comes from the bridge (LifecastBridge.backend());
 // before the bridge has attached, nothing is corrected. When a backend

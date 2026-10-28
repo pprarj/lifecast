@@ -5,10 +5,10 @@
 // RaceMenu's own film on F4, owns the message bridge to the page (Panel/), and
 // edits the face morphs live from the panel (Edit/) - the body too, through
 // OBody, when OBody answers - and ends the menu with the character's name
-// (Edit/Finish.h). The panel is drawn by Prisma UI or Meridian UI, whichever
-// answers (Panel/Panel.h). At startup it also answers one question per log
-// line: which of the two answered, at which version, and which SKEE
-// interfaces are reachable from outside RaceMenu.
+// (Edit/Finish.h). The panel is drawn by Prisma UI, Magelight UI or Meridian
+// UI, the one its package was made for (Panel/Panel.h). At startup it also
+// answers one question per log line: which framework answered, at which
+// version, and which SKEE interfaces are reachable from outside RaceMenu.
 //
 // There is no console test here and there cannot be one - the Skyrim console
 // does not call a global function of a plugin. What calls the code below is
@@ -97,10 +97,20 @@ namespace
 			break;
 
 		case SKSE::MessagingInterface::kPreLoadGame:
-		case SKSE::MessagingInterface::kNewGame:
 			// A freeze must never survive into another game.
 			Lifecast::Edit::Freeze::Release("a game is loading");
 			Lifecast::Edit::Compare::GameChanged();
+			break;
+
+		case SKSE::MessagingInterface::kNewGame:
+			Lifecast::Edit::Freeze::Release("a game is loading");
+			Lifecast::Edit::Compare::GameChanged();
+			// Without a backend, the player is told once per game session.
+			Lifecast::Panel::OnGameLoaded();
+			break;
+
+		case SKSE::MessagingInterface::kPostLoadGame:
+			Lifecast::Panel::OnGameLoaded();
 			break;
 
 		case SKSE::MessagingInterface::kSaveGame:
@@ -138,6 +148,20 @@ namespace
 			// OBody's files, for the log only: they separate "not installed"
 			// from "installed and did not answer", and decide nothing.
 			Lifecast::Core::ObodyLink::ReportFiles();
+
+			// The panel's own preferences, kept across games.
+			Lifecast::Core::Settings::Install();
+
+			// Which web UI framework draws the panel: needs the "backend"
+			// setting, read just above, the pages installed, and the
+			// frameworks' answers, which came at kInputLoaded.
+			Lifecast::Panel::Choose();
+
+			// No backend: nothing below has a page to talk to. RaceMenu opens
+			// as it always does, and the player is told once (OnGameLoaded).
+			if (!Lifecast::Panel::HasBackend()) {
+				break;
+			}
 
 			// The menu and input sinks need the UI and the input manager,
 			// which exist from here on. The browser itself is not created
@@ -177,14 +201,6 @@ namespace
 			// The side by side: the character as she was, next to the
 			// character as she is being edited.
 			Lifecast::Edit::Compare::Install();
-
-			// The panel's own preferences, kept across games.
-			Lifecast::Core::Settings::Install();
-
-			// Which web UI framework draws the panel: needs the "backend"
-			// setting, read just above, and both frameworks' answers, which
-			// came at kInputLoaded.
-			Lifecast::Panel::Choose();
 
 			// The presets on disk, listed for the panel; saving and loading
 			// one, which RaceMenu does at the panel's request; and the guard

@@ -6,6 +6,7 @@
 #include "Core/Settings.h"
 #include "Panel/Backend.h"
 #include "Panel/Bridge.h"
+#include "Panel/MagelightBackend.h"
 #include "Panel/MeridianBackend.h"
 #include "Panel/PrismaBackend.h"
 #include "Version.h"
@@ -14,7 +15,8 @@ namespace Lifecast::Panel
 {
 	namespace
 	{
-		// The order is the choice under "auto": the first that answered wins.
+		// The order is the choice under "auto": the first whose page is
+		// installed and whose framework answered.
 		// A new backend is a row here and a file of its own.
 		struct Row
 		{
@@ -22,8 +24,9 @@ namespace Lifecast::Panel
 			Backend& (*get)();
 		};
 
-		constexpr std::array<Row, 2> kTable{ {
+		constexpr std::array<Row, 3> kTable{ {
 			{ "prisma", &PrismaBackend },
+			{ "magelight", &MagelightBackend },
 			{ "meridian", &MeridianBackend },
 		} };
 
@@ -31,6 +34,22 @@ namespace Lifecast::Panel
 		bool     g_chosen = false;
 		bool     g_visible = false;
 		bool     g_card = false;
+
+		// What the player is told on screen when there is no backend, and
+		// whether it was said this game session.
+		std::string g_notice;
+		bool        g_noticed = false;
+
+		// The Switcher's swap to RaceMenu, for a backend whose page hears the
+		// exit chord itself (Magelight).
+		void (*g_exitHandler)() = nullptr;
+
+		// The backend's page is in this install: the package was made for it.
+		bool PagePresent(Backend& a_backend)
+		{
+			std::error_code ec;
+			return std::filesystem::exists(a_backend.PanelFile(), ec);
+		}
 
 		Backend* Live()
 		{
@@ -95,6 +114,7 @@ namespace Lifecast::Panel
 	void OnInputLoaded()
 	{
 		PrismaStart();
+		MagelightStart("kInputLoaded");
 	}
 
 	void Choose()
@@ -104,46 +124,118 @@ namespace Lifecast::Panel
 		}
 		g_chosen = true;
 
+		// The second chance Magelight's registration gets, for an install
+		// where it was not ready at kInputLoaded.
+		MagelightStart("kDataLoaded");
+
 		const auto setting = Core::Settings::Backend();
 
 		std::string answered;
 		for (const auto& row : kTable) {
-			const bool ok = row.get().Available();
-			answered += fmt::format("{}{} {}", answered.empty() ? "" : ", ", row.name, ok ? "answered" : "absent");
+			auto&      b = row.get();
+			const bool page = PagePresent(b);
+			const bool ok = b.Available();
+			answered += fmt::format("{}{} {}/{}", answered.empty() ? "" : ", ", row.name, page ? "page" : "no page",
+				ok ? "answered" : "absent");
 		}
 
-		Backend*    forced = nullptr;
-		const char* note = "";
+		const Row* forced = nullptr;
 		if (setting != "auto") {
 			for (const auto& row : kTable) {
 				if (setting == row.name) {
-					forced = &row.get();
+					forced = &row;
 				}
-			}
-			if (forced && !forced->Available()) {
-				forced = nullptr;
-				note = " - the forced backend did not answer, so auto decides";
 			}
 		}
 
+		// The one that is missing, when nothing is chosen: the forced one, or
+		// under "auto" the first backend whose page this install has.
+		Backend* missing = nullptr;
 		if (forced) {
-			g_backend = forced;
+			auto& b = forced->get();
+			if (b.Available()) {
+				g_backend = &b;
+			} else {
+				missing = &b;
+			}
 		} else {
 			for (const auto& row : kTable) {
-				if (row.get().Available()) {
-					g_backend = &row.get();
+				auto& b = row.get();
+				if (!PagePresent(b)) {
+					continue;
+				}
+				if (!missing) {
+					missing = &b;
+				}
+				if (b.Available()) {
+					g_backend = &b;
+					missing = nullptr;
 					break;
 				}
 			}
 		}
 
-		if (!g_backend) {
-			spdlog::warn("[panel] backend: setting \"{}\" ({}) -> none - no panel; the Lifecast stays out of the way and "
-						 "RaceMenu opens as it always does",
-				setting, answered);
+		for (const auto& row : kTable) {
+			if (&row.get() != g_backend) {
+				row.get().StandDown();
+			}
+		}
+
+		if (g_backend) {
+			spdlog::info("[panel] backend: setting \"{}\" ({}) -> {}", setting, answered, g_backend->Name());
+			if (!PagePresent(*g_backend)) {
+				spdlog::warn("[panel] the chosen backend's page is not installed ({}) - the panel will be empty",
+					g_backend->PanelFile());
+			}
 			return;
 		}
-		spdlog::info("[panel] backend: setting \"{}\" ({}) -> {}{}", setting, answered, g_backend->Name(), note);
+
+		// No backend. Never another framework than the one the package is
+		// for: its page is the only one installed. The modules stay off
+		// (HasBackend()), and the player is told once per game session.
+		const std::string why = missing ? fmt::format("{} is not loaded", missing->Framework()) :
+		                                  std::string("no backend's page is installed");
+		g_notice = missing ? fmt::format("Lifecast: {} is not installed - RaceMenu opens as usual", missing->Framework()) :
+		                     std::string("Lifecast: its panel files are not installed - RaceMenu opens as usual");
+		const auto line = fmt::format(
+			"[panel] backend: setting \"{}\" ({}) -> none - {}; no other backend is tried, the Lifecast stays out of the "
+			"way and RaceMenu opens as it always does",
+			setting, answered, why);
+		if (forced && std::string_view(forced->name) == "meridian") {
+			// The one case the Meridian log line stays an error: the setting
+			// asks for it by name.
+			spdlog::error("{}", line);
+		} else {
+			spdlog::warn("{}", line);
+		}
+	}
+
+	bool HasBackend()
+	{
+		return g_backend != nullptr;
+	}
+
+	void OnGameLoaded()
+	{
+		if (!g_chosen || g_backend || g_noticed || g_notice.empty()) {
+			return;
+		}
+		g_noticed = true;
+		RE::SendHUDMessage::ShowHUDMessage(g_notice.c_str());
+		spdlog::info("[panel] on-screen notice, once this game session: \"{}\"", g_notice);
+	}
+
+	void SetExitHandler(void (*a_handler)())
+	{
+		g_exitHandler = a_handler;
+	}
+
+	void ExitChordHeard(const char* a_backend)
+	{
+		spdlog::info("[panel] the page heard the exit chord ({}) - the swap goes to the Switcher", a_backend);
+		if (g_exitHandler) {
+			g_exitHandler();
+		}
 	}
 
 	const char* BackendName()

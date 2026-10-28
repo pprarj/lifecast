@@ -6,19 +6,29 @@
 // every caller talks to it through the functions below - no framework type
 // crosses this header.
 //
-// WHICH BACKEND. A table, in order: Prisma UI, then Meridian UI. The setting
-// "backend" in Data\SKSE\Plugins\Lifecast\settings.json (Core/Settings.h)
-// decides:
+// WHICH BACKEND. A table, in order: Prisma UI, Magelight UI, Meridian UI.
+// Each backend has its own page folder, and a release package carries only
+// the folder of the backend it was made for - so the page installed says
+// which backend the player chose:
 //
-//   "auto"      the first of the table that answered - Prisma when both are
-//               installed (the default)
-//   "prisma"    Prisma UI
-//   "meridian"  Meridian UI
+//   Prisma UI     Data\PrismaUI\views\Lifecast\index.html
+//   Magelight UI  Data\Magelight\Lifecast\views\index.html
+//   Meridian UI   Data\MeridianUI\Lifecast\index.html
 //
-// A forced backend that did not answer falls back to "auto", and the log says
-// so in the same line that names the choice. With no backend at all the
-// Lifecast stays out of the way: one log line, and RaceMenu opens as it always
-// did.
+// The setting "backend" in Data\SKSE\Plugins\Lifecast\settings.json
+// (Core/Settings.h) decides:
+//
+//   "auto"       the first of the table whose page is installed and whose
+//                framework answered (the default)
+//   "prisma", "magelight", "meridian"
+//                that backend, whatever pages are installed
+//
+// NO FALLBACK. A forced backend that did not answer, or under "auto" no
+// installed page whose framework answered, means no backend: another
+// framework would open a page that is not there. The Lifecast then stays out
+// of the way - one log line, one on-screen notice per game session naming the
+// framework that is missing, no module installed - and RaceMenu opens as it
+// always did.
 //
 // Lifetime: the page is created once, on first use, and then shown and hidden -
 // never released and re-created while the game runs. The state of what the
@@ -33,15 +43,31 @@ namespace Lifecast::Panel
 	void Init();
 
 	// Starts what a backend has to start before kDataLoaded (Prisma's API and
-	// its exit-chord sink). Call once, from kInputLoaded.
+	// its exit-chord sink, Magelight's registration). Call once, from
+	// kInputLoaded.
 	void OnInputLoaded();
 
 	// Picks the backend from the table and the "backend" setting, and logs the
 	// choice. Call once, at kDataLoaded, after Core::Settings::Install().
 	void Choose();
 
-	// "prisma", "meridian", or "none".
+	// "prisma", "magelight", "meridian", or "none".
 	const char* BackendName();
+
+	// A backend was chosen. Without one the editing modules are not
+	// installed: there is no page for them to talk to.
+	bool HasBackend();
+
+	// A game was loaded or started: with no backend, the on-screen notice is
+	// shown, the first time only. Call on the game thread.
+	void OnGameLoaded();
+
+	// What the Switcher does when the page itself heard the exit chord
+	// (Magelight: the game hears no key while the page holds the keyboard).
+	void SetExitHandler(void (*a_handler)());
+
+	// Called by a backend, on the game thread, when its page heard the chord.
+	void ExitChordHeard(const char* a_backend);
 
 	// Creates the page if it does not exist yet, hidden. Returns false when
 	// there is no backend, or it refused. Call on the game thread.

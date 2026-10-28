@@ -57,8 +57,8 @@
 // THE KEYS (1.5):
 //
 //   backend       "auto" | "prisma"    which web UI framework draws the panel
-//                 | "meridian"         (Panel/Panel.h); "auto". Read once at
-//                                      kDataLoaded: a change takes effect at
+//                 | "magelight"        (Panel/Panel.h); "auto". Read once at
+//                 | "meridian"         kDataLoaded: a change takes effect at
 //                                      the next game start. The panel offers
 //                                      no control for it - it is set by
 //                                      writing the file, e.g. the line
@@ -75,7 +75,7 @@ namespace Lifecast::Core::Settings
 	// kDataLoaded. Safe to call twice.
 	void Install();
 
-	// The "backend" key: "auto", "prisma" or "meridian". "auto" before
+	// The "backend" key: "auto", "prisma", "magelight" or "meridian". "auto" before
 	// Install() has read the file.
 	std::string Backend();
 }

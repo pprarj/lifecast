@@ -105,6 +105,8 @@ namespace Lifecast::Panel
 		{
 		public:
 			const char* Name() const override { return "meridian"; }
+			const char* Framework() const override { return "Meridian UI"; }
+			const char* PanelFile() const override { return "Data\\MeridianUI\\Lifecast\\index.html"; }
 
 			bool Available() override { return Core::MeridianLink::Platform() != nullptr; }
 

@@ -648,6 +648,11 @@ namespace Lifecast::Panel::Switcher
 
 		TakeOverShowRaceMenu();
 
+		// A page that hears the exit chord itself (Magelight, where the game
+		// hears no key while the page holds the keyboard) asks for the same
+		// swap the game's F4 makes here.
+		Panel::SetExitHandler(&ShowRaceMenu);
+
 		g_installed = true;
 		spdlog::info("[switch] installed - F4 swaps the Lifecast and RaceMenu");
 	}
