@@ -8,7 +8,8 @@
 // here calls Edit/, Core/ or the stage directly.
 //
 // 1.6 E2 draws one section whole - Sliders, a tab per RaceMenu category - and
-// the stage: turn and zoom, by the "stage-*" messages stage.js sends.
+// the stage: turn and zoom, by the "stage-*" messages stage.js sends. 1.6 E3
+// adds Look, Race & Sex and the race's preset faces (Face.h), each a tab.
 
 #pragma once
 

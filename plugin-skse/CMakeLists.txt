@@ -98,6 +98,7 @@ add_commonlibsse_plugin(
         src/Panel/RaceMenuFilm.cpp
         src/Panel/RaceMenuTabs.cpp
         src/Panel/Smf/DeadKeys.cpp
+        src/Panel/Smf/Face.cpp
         src/Panel/Smf/View.cpp
         src/Panel/SmfBackend.cpp
         src/Panel/Stage.cpp

@@ -3,7 +3,9 @@
 
 #include "Panel/Smf/View.h"
 
+#include "Panel/Smf/Common.h"
 #include "Panel/Smf/DeadKeys.h"
+#include "Panel/Smf/Face.h"
 
 #include "Panel/Bridge.h"
 #include "Version.h"
@@ -79,6 +81,7 @@ namespace Lifecast::Panel::Smf
 		bool                                      g_card = false;
 		std::string                               g_cardKey = "F4";
 		std::atomic_bool                          g_hybrid = true;  // the default form (D289)
+		int                                       g_section = 0;
 		bool                                      g_slidersReady = false;
 		std::vector<Slider>                       g_sliders;
 		std::unordered_map<std::string, std::size_t> g_byKey;
@@ -112,32 +115,12 @@ namespace Lifecast::Panel::Smf
 		// line: a test bench clicks by it.
 		std::vector<std::string> g_layout;
 		std::string              g_lastLayout;
+		int                      g_layoutSoon = 0;  // frames left before the layout is logged
 		float                    g_clipBottom = 0.0f;
 
-		void Rect(std::string_view a_name)
-		{
-			const auto a = IG::GetItemRectMin();
-			const auto b = IG::GetItemRectMax();
-			if (b.y > g_clipBottom) {
-				return;
-			}
-			g_layout.push_back(fmt::format("{} {:.0f},{:.0f},{:.0f},{:.0f}", a_name, a.x, a.y, b.x, b.y));
-		}
-
-		void Send(std::string_view a_type, json a_data = json::object())
-		{
-			json m = { { "v", Bridge::kProtocolVersion }, { "type", a_type }, { "data", std::move(a_data) } };
-			std::lock_guard l(g_outMx);
-			g_out.push_back(m.dump());
-			++g_sent;
-		}
-
-		std::string Lower(std::string a_s)
-		{
-			std::transform(a_s.begin(), a_s.end(), a_s.begin(),
-				[](unsigned char c) { return static_cast<char>(c < 0x80 ? std::tolower(c) : c); });
-			return a_s;
-		}
+		using Common::Lower;
+		using Common::Rect;
+		using Common::Send;
 
 		std::string Hex(const char* a_s)
 		{
@@ -296,6 +279,7 @@ namespace Lifecast::Panel::Smf
 			Send("racemenu-categories-get");
 			Send("sliders-get");
 			Send("stage-get");
+			Face::Ask();
 		}
 
 		void DrawCard(IG::ImGuiIO* a_io)
@@ -434,6 +418,46 @@ namespace Lifecast::Panel::Smf
 			IG::EndTabBar();
 		}
 
+		// The sections, one tab each: the sliders, the look, race and sex, the
+		// race's preset faces.
+		void DrawSections()
+		{
+			if (!IG::BeginTabBar("##lifecast-sections")) {
+				return;
+			}
+			constexpr const char* kNames[] = { "Sliders###sec-sliders", "Look###sec-look", "Race & Sex###sec-race",
+				"Race Faces###sec-faces" };
+			constexpr const char* kRects[] = { "sec:sliders", "sec:look", "sec:race", "sec:faces" };
+			for (int i = 0; i < 4; ++i) {
+				const bool open = IG::BeginTabItem(kNames[i]);
+				Rect(kRects[i]);
+				if (!open) {
+					continue;
+				}
+				if (g_section != i) {
+					g_section = i;
+					spdlog::info("[smf] view: section {}", kRects[i] + 4);
+					Common::LayoutSoon();
+				}
+				switch (i) {
+				case 0:
+					DrawSliders();
+					break;
+				case 1:
+					Face::DrawLook();
+					break;
+				case 2:
+					Face::DrawRaceSex();
+					break;
+				default:
+					Face::DrawRacePresets();
+					break;
+				}
+				IG::EndTabItem();
+			}
+			IG::EndTabBar();
+		}
+
 		// The stage under the "all" form: a drag or the wheel outside the
 		// panel, which only the window sees while it holds the input.
 		void StageInput(IG::ImGuiIO* a_io, bool a_holds)
@@ -489,6 +513,43 @@ namespace Lifecast::Panel::Smf
 			}
 			g_frameRight = right;
 			Send("stage-frame", { { "on", true }, { "left", 0.0 }, { "right", right } });
+		}
+	}
+
+	namespace Common
+	{
+		void LayoutSoon()
+		{
+			g_layoutSoon = 3;
+		}
+
+		void Rect(std::string_view a_name)
+		{
+			if (!IG::IsItemVisible()) {
+				return;
+			}
+			const auto a = IG::GetItemRectMin();
+			const auto b = IG::GetItemRectMax();
+			if (b.y > g_clipBottom) {
+				return;
+			}
+			g_layout.push_back(fmt::format("{} {:.0f},{:.0f},{:.0f},{:.0f}", a_name, a.x, a.y, b.x, b.y));
+		}
+
+		void Send(std::string_view a_type, json a_data)
+		{
+			Face::Sent(a_type);
+			json m = { { "v", Bridge::kProtocolVersion }, { "type", a_type }, { "data", std::move(a_data) } };
+			std::lock_guard l(g_outMx);
+			g_out.push_back(m.dump());
+			++g_sent;
+		}
+
+		std::string Lower(std::string a_s)
+		{
+			std::transform(a_s.begin(), a_s.end(), a_s.begin(),
+				[](unsigned char c) { return static_cast<char>(c < 0x80 ? std::tolower(c) : c); });
+			return a_s;
 		}
 	}
 
@@ -548,9 +609,12 @@ namespace Lifecast::Panel::Smf
 			g_stage.free = data.value("free", false);
 			g_stage.turn = data.value("turn", 0.0);
 			g_stage.distance = data.value("distance", 0.0);
-		} else {
+		} else if (!Face::Receive(type, data)) {
 			++g_ignored;
 		}
+		// A list stamp is answered within seconds (Core/ListSig.cpp); the
+		// answer must not wait for the window to draw again.
+		Flush();
 	}
 
 	void Open()
@@ -597,7 +661,8 @@ namespace Lifecast::Panel::Smf
 		if (g_helloed && !g_compatible) {
 			IG::TextUnformatted("This view and the DLL speak different protocol versions.");
 		}
-		// The input form, while both are being measured (1.6 E2).
+		// The input form, while both are being measured (1.6 E2). "Hybrid"
+		// hands the input to whoever the cursor is over (D291).
 		const bool hybrid = g_hybrid;
 		IG::TextUnformatted("Input:");
 		IG::SameLine();
@@ -613,13 +678,16 @@ namespace Lifecast::Panel::Smf
 		IG::Separator();
 		DrawStage();
 		IG::Separator();
-		DrawSliders();
+		DrawSections();
 		f.wantText = io->WantTextInput;
 		f.drawn = true;
 		IG::End();
 		g_lastLayout = fmt::format("window {:.0f},{:.0f},{:.0f},{:.0f}", f.x, f.y, f.x + f.w, f.y + f.h);
 		for (const auto& e : g_layout) {
 			g_lastLayout += "; " + e;
+		}
+		if (g_layoutSoon > 0 && --g_layoutSoon == 0) {
+			spdlog::info("[smf] view layout: {}", g_lastLayout);
 		}
 
 		StageInput(io, a_holds);
@@ -670,6 +738,8 @@ namespace Lifecast::Panel::Smf
 					 "turn {:.1f} distance {:.1f}, zoom asked {} | received {}, not drawn {}, sent {}",
 			a_what, g_visible, g_card, g_hybrid ? "hybrid" : "all", g_sliders.size(), g_tabs.size(), g_slidersReady,
 			g_stage.ready, g_stage.free, g_stage.turn, g_stage.distance, g_zooms, g_received, g_ignored, g_sent);
+		spdlog::info("[smf] view {}: section {}", a_what, g_section);
+		Face::LogState(a_what);
 		spdlog::info("[smf] view layout: {}", g_lastLayout.empty() ? std::string("not drawn yet") : g_lastLayout);
 	}
 }
