@@ -10,7 +10,7 @@ go to the Bugs tab there, or to this repository's issues.
 
 ## Requirements
 
-Every download needs SKSE, Address Library for SKSE Plugins and RaceMenu. On top of that, pick **one** download and install the framework it names:
+Every download needs SKSE, Address Library for SKSE Plugins, RaceMenu and Media Keys Fix (without it the keyboard does not reach the panel, so the name field and the search boxes receive no keys). On top of that, pick **one** download and install the framework it names:
 
 | Download | Also requires |
 |---|---|
