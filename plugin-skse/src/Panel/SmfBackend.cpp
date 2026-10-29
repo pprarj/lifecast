@@ -282,15 +282,27 @@ namespace Lifecast::Panel
 				}
 				// D318: LAlt (stage.js's far/near swap) heard on the game's input
 				// under the hybrid form, handed to the view as Prisma's backend
-				// hands it to the page. The key goes on to RaceMenu.
+				// hands it to the page.
+				// D326: and held back from RaceMenu. Its own LAlt shortcut runs
+				// the film's onZoomClicked too, so a press that reached both was
+				// two swaps of the same flag and the camera stayed where it was.
+				// The event is left in the chain with no press in it (value and
+				// held time zero: not down, not held, not up), so the other
+				// events of the same frame still reach the game. The All form
+				// gets the same from the window holding the input.
 				if (a_event && g_visible && Smf::Hybrid() && !Smf::Card()) {
 					for (auto* e = *a_event; e; e = e->next) {
-						const auto* b = e->GetDevice() == RE::INPUT_DEVICES::kKeyboard ? e->AsButtonEvent() : nullptr;
-						if (b && b->GetIDCode() == kLeftAlt && b->IsDown()) {
+						auto* b = e->GetDevice() == RE::INPUT_DEVICES::kKeyboard ? e->AsButtonEvent() : nullptr;
+						if (!b || b->GetIDCode() != kLeftAlt) {
+							continue;
+						}
+						if (b->IsDown()) {
 							if (auto* tasks = SKSE::GetTaskInterface()) {
 								tasks->AddTask([]() { Bridge::Send("key-lalt"); });
 							}
 						}
+						b->GetRuntimeData().value = 0.0f;
+						b->GetRuntimeData().heldDownSecs = 0.0f;
 					}
 				}
 				const auto dik = g_chordDik.load();
