@@ -100,6 +100,7 @@ add_commonlibsse_plugin(
         src/Panel/Smf/Control.cpp
         src/Panel/Smf/DeadKeys.cpp
         src/Panel/Smf/Face.cpp
+        src/Panel/Smf/Groups.cpp
         src/Panel/Smf/History.cpp
         src/Panel/Smf/Presets.cpp
         src/Panel/Smf/Skin.cpp

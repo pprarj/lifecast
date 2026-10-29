@@ -14,6 +14,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <string>
+#include <vector>
+
 namespace Lifecast::Panel::Smf::Skin
 {
 	// One message from the DLL. True when it belongs to these sections.
@@ -23,9 +26,29 @@ namespace Lifecast::Panel::Smf::Skin
 	// "body-get"), sent when the view comes on screen.
 	void Ask();
 
-	void DrawTints();
-	void DrawPaint();
-	void DrawBody();
+	// A tint layer or a paint area as the view's sections see it (D325):
+	// the key, the label, and the rows the page builds for it (".slider",
+	// counted by belt.js) - a tint layer has Red, Green, Blue and Intensity,
+	// plus Texture when it is picked and Catalog when it has a catalog; a
+	// paint layer has Texture, Intensity and Glow.
+	struct Part
+	{
+		std::string key;
+		std::string label;
+		int         rows = 0;
+	};
+	bool              TintsReady();
+	std::vector<Part> TintLayers();
+	std::vector<Part> PaintAreas();
+
+	// One tint layer, drawn in the section its key gives (tints.js HOME).
+	void DrawTintLayer(const std::string& a_key);
+	// What Skin & Tints says while it has no layer of its own to show.
+	void DrawTintStatus();
+	// Every layer of one paint area, one under the other (overlays.js).
+	void DrawPaintArea(const std::string& a_key);
+	// a_height: the list's height, 0 to fill what is left.
+	void DrawBody(float a_height);
 
 	// The OBody section exists only while OBody answers with presets
 	// (body.js): no empty section, no disabled one.

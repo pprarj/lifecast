@@ -606,15 +606,18 @@ namespace Lifecast::Panel::Smf::Face
 		}
 	}
 
-	void DrawLook()
+	bool LookReady()
+	{
+		return g_lookReady;
+	}
+
+	void DrawLookRow(const char* a_key)
 	{
 		if (!g_lookReady) {
-			IG::TextDisabled("Reading the character's look...");
 			return;
 		}
-		IG::BeginChild("##look");
-		Theme::Body();
-		if (g_weight.present) {
+		const std::string_view key(a_key);
+		if (key == "weight" && g_weight.present) {
 			Theme::Group("Weight");
 			IG::SetNextItemWidth(-1.0f);
 			float       v = g_weight.v;
@@ -641,18 +644,22 @@ namespace Lifecast::Panel::Smf::Face
 				g_weight.active = false;
 			}
 			IG::Separator();
+			return;
 		}
 		for (const auto& r : kRows) {
+			if (key != r.key) {
+				continue;
+			}
 			auto& l = g_lists[r.key];
 			if (!l.present || l.count == 0) {
-				continue;
+				return;
 			}
 			Theme::Group(r.label);
 			if (!l.name.empty() && l.index >= 0) {
 				IG::SameLine();
 				IG::TextDisabled("%s%s%s", l.name.c_str(), l.source.empty() ? "" : "  -  ", l.source.c_str());
 			}
-			if (std::string_view(r.key) == "hair-color") {
+			if (key == "hair-color") {
 				HairColor(l);
 			} else {
 				Stepper(r.key, l);
@@ -661,18 +668,19 @@ namespace Lifecast::Panel::Smf::Face
 				}
 			}
 			IG::Separator();
+			return;
 		}
-		IG::EndChild();
 	}
 
-	void DrawRaceSex(float a_below)
+	void DrawSex()
 	{
 		if (!g_raceReady) {
 			IG::TextDisabled("Race and sex: %s", g_rsStatus.c_str());
 			return;
 		}
 		const bool busy = !g_rsPending.empty();
-		Theme::Group("Sex");
+		IG::AlignTextToFramePadding();
+		IG::TextDisabled("Sex");
 		for (int f = 0; f < 2; ++f) {
 			IG::SameLine();
 			const bool current = g_female == f;
@@ -686,10 +694,17 @@ namespace Lifecast::Panel::Smf::Face
 			Rect(f ? "sex:female" : "sex:male");
 		}
 		IG::TextDisabled("%s", g_rsStatus.c_str());
-		IG::Separator();
-		Theme::Group("Race");
-		// a_below: what the section draws under the list (View's "In RaceMenu")
-		IG::BeginChild("##races", IG::ImVec2{ 0.0f, -a_below });
+	}
+
+	void DrawRace(float a_height)
+	{
+		if (!g_raceReady) {
+			IG::TextDisabled("Race and sex: %s", g_rsStatus.c_str());
+			return;
+		}
+		const bool busy = !g_rsPending.empty();
+		IG::TextDisabled("%s", g_rsStatus.c_str());
+		IG::BeginChild("##races", IG::ImVec2{ 0.0f, a_height });
 		Theme::Body();
 		for (int i = 0; i < static_cast<int>(g_races.size()); ++i) {
 			IG::PushID(i);
@@ -706,7 +721,7 @@ namespace Lifecast::Panel::Smf::Face
 		IG::EndChild();
 	}
 
-	void DrawRacePresets()
+	void DrawRacePresets(float a_height)
 	{
 		if (g_rpCount == 0) {
 			IG::TextDisabled("%s", g_rpStatus.c_str());
@@ -736,7 +751,7 @@ namespace Lifecast::Panel::Smf::Face
 		IG::SameLine();
 		IG::Text("Preset %d / %d", g_rpAt + 1, g_rpCount);
 		IG::TextDisabled("%s", g_rpStatus.c_str());
-		IG::BeginChild("##rp");
+		IG::BeginChild("##rp", IG::ImVec2{ 0.0f, a_height });
 		Theme::Body();
 		for (int i = 0; i < g_rpCount; ++i) {
 			IG::PushID(i);

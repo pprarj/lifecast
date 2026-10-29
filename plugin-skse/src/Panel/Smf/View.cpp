@@ -7,6 +7,7 @@
 #include "Panel/Smf/Control.h"
 #include "Panel/Smf/DeadKeys.h"
 #include "Panel/Smf/Face.h"
+#include "Panel/Smf/Groups.h"
 #include "Panel/Smf/History.h"
 #include "Panel/Smf/Presets.h"
 #include "Panel/Smf/Skin.h"
@@ -19,12 +20,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <mutex>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -54,8 +57,11 @@ namespace Lifecast::Panel::Smf
 		{
 			std::string k;
 			std::string label;
-			std::string lower;  // the label in lower case, for the search
+			std::string lower;  // what the row shows, in lower case, for the search
 			std::string tab;
+			std::string kind;   // "engine" for the game's 18 (sliders.js)
+			std::string text;   // the film's own text, by which the 18 are known
+			std::string shown;  // the row's name: the short one for the 18 ("Length" under Nose)
 			float       min = 0.0f;
 			float       max = 1.0f;
 			float       step = 0.01f;
@@ -85,8 +91,17 @@ namespace Lifecast::Panel::Smf
 			std::string              label;
 			std::string              key;
 			std::uint32_t            flag = 0;
-			int                      order = 1 << 20;
+		};
+
+		// A section the film's sliders go to (sliders.js build): the game's
+		// 18 at its head, the others after the look's controls (D325).
+		struct Film
+		{
+			std::string              key;
+			std::string              title;
+			std::vector<std::size_t> head;
 			std::vector<std::size_t> rows;
+			bool                     modTab = false;
 		};
 
 		// The "stage" message (Stage.cpp State), as stage.js reads it.
@@ -133,13 +148,23 @@ namespace Lifecast::Panel::Smf
 		bool                                      g_card = false;
 		std::string                               g_cardKey = "F4";
 		std::atomic_bool                          g_hybrid = true;  // the default form (D289)
-		// The open category, or kSectionNone: the first open of the game shows
-		// no category, as belt.js does (D323); later opens keep the player's.
-		int                                       g_section = -1;
+		// The open category (Groups, or kCatAll), or kCatNone: the first open
+		// of the game shows no category, as belt.js does (D323); later opens
+		// keep the player's, on the section last shown in it (D325).
+		constexpr int                             kCatNone = Groups::kNone;
+		constexpr int                             kCatAll = Groups::kCount;
+		int                                       g_cat = kCatNone;
+		std::string                               g_region;
+		std::unordered_map<int, std::string>      g_lastRegion;
 		bool                                      g_slidersReady = false;
 		std::vector<Slider>                       g_sliders;
 		std::unordered_map<std::string, std::size_t> g_byKey;
 		std::vector<Tab>                          g_tabs;
+		std::vector<Film>                         g_film;  // the sections the film's sliders go to
+		std::unordered_map<std::string, std::uint32_t> g_mounted;  // section key -> the order it was first seen in
+		int                                       g_modTabs = 0;
+		bool                                      g_noneArmed = false;  // no mod tab since g_noneSince
+		Clock::time_point                         g_noneSince{};
 		std::string                               g_signature;
 		bool                                      g_needDrawn = false;
 		json                                      g_categories = json::array();
@@ -178,6 +203,7 @@ namespace Lifecast::Panel::Smf
 		// Render-only.
 		char              g_search[128] = {};
 		bool              g_changedOnly = false;  // the "Changed" filter (search.js)
+		std::string       g_beltFor;  // what the belt line last logged
 		std::string       g_counterFor = "\x01";  // what the counter line last logged
 		Drag              g_drag = Drag::kNone;
 		int               g_dragButton = 0;
@@ -211,7 +237,6 @@ namespace Lifecast::Panel::Smf
 		bool              g_scaleHeard = false;
 		float             g_frameLeft = -1.0f;
 		float             g_frameRight = -1.0f;
-		std::string       g_tab = "\x01";  // the slider category shown (a tab id; "\x01" until the first)
 
 		// Where the widgets were last frame, screen pixels, for the state
 		// line: a test bench clicks by it.
@@ -231,32 +256,6 @@ namespace Lifecast::Panel::Smf
 				out += fmt::format("{}{:02X}", out.empty() ? "" : " ", *p);
 			}
 			return out;
-		}
-
-		// The tabs in the order RaceMenu lists its categories; the sliders
-		// with no tab first, and a tab RaceMenu does not list last.
-		void ApplyOrder()
-		{
-			for (auto& t : g_tabs) {
-				if (t.id.empty()) {
-					t.order = -1;
-					continue;
-				}
-				t.order = 1 << 20;
-				for (const auto& e : g_categories) {
-					if (!e.is_object()) {
-						continue;
-					}
-					const auto key = e.value("key", std::string());
-					const auto flag = e.value("flag", 0u);
-					const auto index = e.value("index", 0);
-					if ((!t.key.empty() && key == t.key) || (t.key.empty() && flag != 0 && flag == t.flag)) {
-						t.order = index;
-						break;
-					}
-				}
-			}
-			std::stable_sort(g_tabs.begin(), g_tabs.end(), [](const Tab& a, const Tab& b) { return a.order < b.order; });
 		}
 
 		float Num(const json& a_o, const char* a_key, float a_fallback)
@@ -283,6 +282,219 @@ namespace Lifecast::Panel::Smf
 		bool Changed(const Slider& a_s)
 		{
 			return a_s.has && a_s.hasInitial && std::abs(a_s.v - a_s.initial) > 1e-6f;
+		}
+
+		// controls.js mountedAt: the order a section key was first seen in. A
+		// section is never unmounted (sliders.js), so the order holds for the
+		// run of the game; it breaks ties inside "morph:*" and "face:*".
+		std::uint32_t Mount(const std::string& a_key)
+		{
+			return g_mounted.try_emplace(a_key, static_cast<std::uint32_t>(g_mounted.size())).first->second;
+		}
+
+		// sliders.js titleOf: an all-caps tab label in title case.
+		std::string TitleOf(const std::string& a_label)
+		{
+			if (a_label.empty()) {
+				return "Sliders";
+			}
+			for (const unsigned char c : a_label) {
+				if (std::toupper(c) != c) {
+					return a_label;
+				}
+			}
+			std::string out;
+			bool        start = true;
+			for (const unsigned char c : a_label) {
+				if (std::isspace(c)) {
+					out += static_cast<char>(c);
+					start = true;
+					continue;
+				}
+				out += static_cast<char>(start ? std::toupper(c) : std::tolower(c));
+				start = false;
+			}
+			return out;
+		}
+
+		// sliders.js ENGINE: the game's 18, by the text RaceMenu gives them:
+		// face section and row name. The order is the order of the rows.
+		struct Engine
+		{
+			const char* text;
+			const char* part;
+			const char* name;
+		};
+		constexpr Engine kEngine[] = {
+			{ "Nose Length", "Nose", "Length" }, { "Nose Height", "Nose", "Height" },
+			{ "Jaw Height", "Jaw", "Height" }, { "Jaw Width", "Jaw", "Width" }, { "Jaw Forward", "Jaw", "Forward" },
+			{ "Cheekbone Height", "Cheekbones", "Height" }, { "Cheekbone Width", "Cheekbones", "Width" },
+			{ "Eye Height", "Eyes", "Height" }, { "Eye Width", "Eyes", "Width" }, { "Eye Depth", "Eyes", "Depth" },
+			{ "Brow Height", "Brows", "Height" }, { "Brow Width", "Brows", "Width" }, { "Brow Forward", "Brows", "Forward" },
+			{ "Mouth Height", "Mouth", "Height" }, { "Mouth Forward", "Mouth", "Forward" },
+			{ "Chin Width", "Chin", "Width" }, { "Chin Length", "Chin", "Length" }, { "Chin Forward", "Chin", "Forward" },
+		};
+		constexpr int kNoEngine = 1 << 20;
+
+		// The Russian game labels the same 18 in Russian (sliders.js RU),
+		// as UTF-8: the same rows, by alias.
+		struct Alias
+		{
+			const char* text;
+			const char* english;
+		};
+		constexpr Alias kEngineRu[] = {
+			{ "\xD0\x94\xD0\xBB\xD0\xB8\xD0\xBD\xD0\xB0\x20\xD0\xBD\xD0\xBE\xD1\x81\xD0\xB0", "Nose Length" },
+			{ "\xD0\x92\xD1\x8B\xD1\x81\xD0\xBE\xD1\x82\xD0\xB0\x20\xD0\xBD\xD0\xBE\xD1\x81\xD0\xB0", "Nose Height" },
+			{ "\xD0\x92\xD1\x8B\xD1\x81\xD0\xBE\xD1\x82\xD0\xB0\x20\xD1\x87\xD0\xB5\xD0\xBB\xD1\x8E\xD1\x81\xD1\x82\xD0\xB8", "Jaw Height" },
+			{ "\xD0\xA8\xD0\xB8\xD1\x80\xD0\xB8\xD0\xBD\xD0\xB0\x20\xD1\x87\xD0\xB5\xD0\xBB\xD1\x8E\xD1\x81\xD1\x82\xD0\xB8", "Jaw Width" },
+			{ "\xD0\xA7\xD0\xB5\xD0\xBB\xD1\x8E\xD1\x81\xD1\x82\xD1\x8C\x20\xD0\xB2\xD0\xBF\xD0\xB5\xD1\x80\xD0\xB5\xD0\xB4", "Jaw Forward" },
+			{ "\xD0\x92\xD1\x8B\xD1\x81\xD0\xBE\xD1\x82\xD0\xB0\x20\xD1\x81\xD0\xBA\xD1\x83\xD0\xBB", "Cheekbone Height" },
+			{ "\xD0\xA8\xD0\xB8\xD1\x80\xD0\xB8\xD0\xBD\xD0\xB0\x20\xD1\x81\xD0\xBA\xD1\x83\xD0\xBB", "Cheekbone Width" },
+			{ "\xD0\x92\xD1\x8B\xD1\x81\xD0\xBE\xD1\x82\xD0\xB0\x20\xD0\xB3\xD0\xBB\xD0\xB0\xD0\xB7", "Eye Height" },
+			{ "\xD0\xA0\xD0\xB0\xD1\x81\xD1\x81\xD1\x82\xD0\xBE\xD1\x8F\xD0\xBD\xD0\xB8\xD0\xB5\x20\xD0\xBC\xD0\xB5\xD0\xB6\xD0\xB4\xD1\x83\x20\xD0\xB3\xD0\xBB\xD0\xB0\xD0\xB7\xD0\xB0\xD0\xBC\xD0\xB8", "Eye Width" },
+			{ "\xD0\x93\xD0\xBB\xD1\x83\xD0\xB1\xD0\xB8\xD0\xBD\xD0\xB0\x20\xD0\xB3\xD0\xBB\xD0\xB0\xD0\xB7\xD0\xBD\xD0\xB8\xD1\x86", "Eye Depth" },
+			{ "\xD0\x92\xD1\x8B\xD1\x81\xD0\xBE\xD1\x82\xD0\xB0\x20\xD0\xB1\xD1\x80\xD0\xBE\xD0\xB2\xD0\xB5\xD0\xB9", "Brow Height" },
+			{ "\xD0\xA8\xD0\xB8\xD1\x80\xD0\xB8\xD0\xBD\xD0\xB0\x20\xD0\xB1\xD1\x80\xD0\xBE\xD0\xB2\xD0\xB5\xD0\xB9", "Brow Width" },
+			{ "\xD0\x91\xD1\x80\xD0\xBE\xD0\xB2\xD0\xB8\x20\xD0\xB2\xD0\xBF\xD0\xB5\xD1\x80\xD0\xB5\xD0\xB4", "Brow Forward" },
+			{ "\xD0\x92\xD1\x8B\xD1\x81\xD0\xBE\xD1\x82\xD0\xB0\x20\xD0\xB3\xD1\x83\xD0\xB1", "Mouth Height" },
+			{ "\xD0\x93\xD1\x83\xD0\xB1\xD1\x8B\x20\xD0\xB2\xD0\xBF\xD0\xB5\xD1\x80\xD0\xB5\xD0\xB4", "Mouth Forward" },
+			{ "\xD0\xA8\xD0\xB8\xD1\x80\xD0\xB8\xD0\xBD\xD0\xB0\x20\xD0\xBF\xD0\xBE\xD0\xB4\xD0\xB1\xD0\xBE\xD1\x80\xD0\xBE\xD0\xB4\xD0\xBA\xD0\xB0", "Chin Width" },
+			{ "\xD0\x94\xD0\xBB\xD0\xB8\xD0\xBD\xD0\xB0\x20\xD0\xBF\xD0\xBE\xD0\xB4\xD0\xB1\xD0\xBE\xD1\x80\xD0\xBE\xD0\xB4\xD0\xBA\xD0\xB0", "Chin Length" },
+			{ "\xD0\x9F\xD0\xBE\xD0\xB4\xD0\xB1\xD0\xBE\xD1\x80\xD0\xBE\xD0\xB4\xD0\xBE\xD0\xBA\x20\xD0\xB2\xD0\xBF\xD0\xB5\xD1\x80\xD0\xB5\xD0\xB4", "Chin Forward" },
+		};
+
+		// The tab sliders.js gives its own section: the body scales.
+		constexpr const char* kScales = "rsm_body_scale";
+
+		int EngineAt(const Slider& a_s)
+		{
+			if (a_s.kind != "engine") {
+				return kNoEngine;
+			}
+			std::string_view text = a_s.text;
+			for (const auto& a : kEngineRu) {
+				if (text == a.text) {
+					text = a.english;
+					break;
+				}
+			}
+			for (int i = 0; i < static_cast<int>(std::size(kEngine)); ++i) {
+				if (text == kEngine[i].text) {
+					return i;
+				}
+			}
+			return kNoEngine;
+		}
+
+		// sliders.js homeOf, for a slider that is not one of the 18: the
+		// section key and its title (empty: a section that has its own).
+		std::pair<std::string, std::string> HomeOf(const Slider& a_s)
+		{
+			const Tab* tab = nullptr;
+			for (const auto& t : g_tabs) {
+				if (t.id == a_s.tab) {
+					tab = &t;
+					break;
+				}
+			}
+			if (!tab) {
+				return { "morph:-", "Other Sliders" };
+			}
+			if (!tab->key.empty()) {
+				return tab->key == kScales ? std::pair<std::string, std::string>{ "scales", "Body Scales" } :
+				                             std::pair<std::string, std::string>{ "morph:" + tab->key, tab->label };
+			}
+			// RaceMenu's Body tab (bit 4) has a section of its own (D283).
+			if (tab->flag == 4) {
+				return { "body:sliders", "Body Sliders" };
+			}
+			// RaceMenu's tabs by bit that have a section here already.
+			switch (tab->flag) {
+			case 32:
+				return { "face:Eyes", "" };
+			case 64:
+				return { "face:Brows", "" };
+			case 128:
+				return { "face:Mouth", "" };
+			case 256:
+				return { "look:Hair", "" };
+			default:
+				return { "face:tab:" + tab->id, TitleOf(tab->label) };
+			}
+		}
+
+		const Film* FilmOf(std::string_view a_key)
+		{
+			for (const auto& f : g_film) {
+				if (f.key == a_key) {
+					return &f;
+				}
+			}
+			return nullptr;
+		}
+
+		int FilmRows(const Film* a_f)
+		{
+			return a_f ? static_cast<int>(a_f->head.size() + a_f->rows.size()) : 0;
+		}
+
+		// sliders.js build(): every slider to the section homeOf gives it, the
+		// game's 18 at the head of their face part in the table's order, the
+		// rest in the film's. The sections stay; only their rows are rebuilt.
+		void PlaceSliders()
+		{
+			auto film = [](const std::string& a_key, const std::string& a_title) -> Film& {
+				Mount(a_key);
+				for (auto& f : g_film) {
+					if (f.key == a_key) {
+						if (!a_title.empty()) {
+							f.title = a_title;
+						}
+						return f;
+					}
+				}
+				g_film.push_back({ a_key, a_title, {}, {}, false });
+				return g_film.back();
+			};
+			for (auto& f : g_film) {
+				f.head.clear();
+				f.rows.clear();
+				f.modTab = false;
+			}
+			// A mod's tab is a section even when it holds nothing.
+			g_modTabs = 0;
+			for (const auto& t : g_tabs) {
+				if (!t.key.empty() && t.key != kScales) {
+					++g_modTabs;
+					film("morph:" + t.key, t.label).modTab = true;
+				}
+			}
+			std::vector<std::pair<int, std::size_t>> order;
+			for (std::size_t i = 0; i < g_sliders.size(); ++i) {
+				order.emplace_back(EngineAt(g_sliders[i]), i);
+			}
+			std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			for (const auto& [e, i] : order) {
+				auto& s = g_sliders[i];
+				if (e != kNoEngine) {
+					s.shown = kEngine[e].name;
+					film(std::string("face:") + kEngine[e].part, kEngine[e].part).head.push_back(i);
+				} else {
+					s.shown = s.label;
+					const auto [key, title] = HomeOf(s);
+					film(key, title).rows.push_back(i);
+				}
+				s.lower = Lower(s.shown);
+			}
+			// sliders.js: the six seconds start at the first list with no mod
+			// tab, and a mod tab ends them.
+			if (g_modTabs > 0) {
+				g_noneArmed = false;
+			} else if (!g_noneArmed) {
+				g_noneArmed = true;
+				g_noneSince = Clock::now();
+			}
 		}
 
 		void OnSliders(const json& a_data)
@@ -326,7 +538,6 @@ namespace Lifecast::Panel::Smf
 			}
 
 			g_tabs.clear();
-			g_tabs.push_back({ "", "General", "", 0, -1, {} });
 			for (const auto& t : tabs) {
 				Tab tab;
 				tab.id = t.value("id", std::string());
@@ -343,8 +554,9 @@ namespace Lifecast::Panel::Smf
 				Slider row;
 				row.k = s.value("k", std::string());
 				row.label = s.value("label", s.value("text", row.k));
-				row.lower = Lower(row.label);
 				row.tab = s.value("tab", std::string());
+				row.kind = s.value("kind", std::string());
+				row.text = s.value("text", std::string());
 				row.min = Num(s, "min", 0.0f);
 				row.max = Num(s, "max", 1.0f);
 				row.step = Num(s, "step", 0.01f);
@@ -364,22 +576,15 @@ namespace Lifecast::Panel::Smf
 				g_byKey[row.k] = g_sliders.size();
 				g_sliders.push_back(std::move(row));
 			}
-			ApplyOrder();
-			for (auto& t : g_tabs) {
-				t.rows.clear();
-			}
-			for (std::size_t i = 0; i < g_sliders.size(); ++i) {
-				std::size_t home = 0;
-				for (std::size_t t = 0; t < g_tabs.size(); ++t) {
-					if (g_tabs[t].id == g_sliders[i].tab) {
-						home = t;
-						break;
-					}
-				}
-				g_tabs[home].rows.push_back(i);
-			}
+			PlaceSliders();
 			g_needDrawn = true;
-			spdlog::info("[smf] view: {} sliders in {} tabs", g_sliders.size(), g_tabs.size());
+			std::string where;
+			for (const auto& f : g_film) {
+				if (const int n = FilmRows(&f); n > 0) {
+					where += fmt::format("{}{} {}", where.empty() ? "" : ", ", f.key, n);
+				}
+			}
+			spdlog::info("[smf] view: {} sliders from {} tabs, by section: {}", g_sliders.size(), g_tabs.size(), where);
 		}
 
 		// "In RaceMenu" (delegate.js): the fixed rows (D027), then a door for
@@ -447,10 +652,10 @@ namespace Lifecast::Panel::Smf
 			g_needDrawn = false;
 			json        sections = json::object();
 			std::size_t rows = 0;
-			for (const auto& t : g_tabs) {
-				if (!t.rows.empty()) {
-					sections[t.id.empty() ? "general" : t.id] = t.rows.size();
-					rows += t.rows.size();
+			for (const auto& f : g_film) {
+				if (const int n = FilmRows(&f); n > 0) {
+					sections[f.key] = n;
+					rows += static_cast<std::size_t>(n);
 				}
 			}
 			Send("sliders-drawn",
@@ -471,6 +676,8 @@ namespace Lifecast::Panel::Smf
 			g_shownAt = Clock::now();
 			g_slidersSinceShown = 0;
 			g_categoriesSinceShown = 0;
+			// the belt's line is logged on every open of the view
+			g_beltFor.clear();
 		}
 
 		void AskLookAfterFilm(const char* a_what, std::size_t a_n)
@@ -687,7 +894,7 @@ namespace Lifecast::Panel::Smf
 		void DrawRow(Slider& a_s)
 		{
 			IG::PushID(a_s.k.c_str());
-			IG::TextUnformatted(a_s.label.c_str());
+			IG::TextUnformatted(a_s.shown.c_str());
 			if (!a_s.has) {
 				IG::SameLine();
 				IG::TextDisabled("(no value)");
@@ -758,273 +965,18 @@ namespace Lifecast::Panel::Smf
 			return hit;
 		}
 
-		bool Shows(const Slider& a_s, const std::string& a_find)
-		{
-			return (a_find.empty() || a_s.lower.find(a_find) != std::string::npos) && (!g_changedOnly || Changed(a_s));
-		}
-
-		// The counter (search.js): "N changed of M" with the filter on, "M of T
-		// sliders" with a search, "T sliders in S sections" otherwise. It counts
-		// the rows of Sliders, which is where the view's search and filter
-		// look (D312). Logged once per change, with the rows a filter shows.
-		std::string Counter(const std::string& a_find)
-		{
-			std::size_t total = 0;
-			std::size_t sections = 0;
-			std::size_t matched = 0;
-			std::size_t changedMatched = 0;
-			std::string shown;
-			std::size_t named = 0;
-			for (const auto& t : g_tabs) {
-				if (t.rows.empty()) {
-					continue;
-				}
-				++sections;
-				for (const auto i : t.rows) {
-					const auto& s = g_sliders[i];
-					++total;
-					if (!a_find.empty() && s.lower.find(a_find) == std::string::npos) {
-						continue;
-					}
-					++matched;
-					if (Changed(s)) {
-						++changedMatched;
-					}
-					if ((!a_find.empty() || g_changedOnly) && Shows(s, a_find) && named < 12) {
-						shown += fmt::format("{}'{}'", named++ ? ", " : "", s.label);
-					}
-				}
-			}
-			const auto text = g_changedOnly ? fmt::format("{} changed of {}", changedMatched, matched) :
-			                  !a_find.empty() ? fmt::format("{} of {} sliders", matched, total) :
-			                                    fmt::format("{} sliders in {} sections", total, sections);
-			if (const auto key = text + "|" + a_find + "|" + shown; key != g_counterFor) {
-				g_counterFor = key;
-				spdlog::info("[smf] view: sliders counter '{}' (search '{}', changed filter {}){}{}", text, a_find,
-					g_changedOnly ? "on" : "off", shown.empty() ? "" : " - rows shown: ", shown);
-			}
-			return text;
-		}
-
-		// The head of Sliders: the search and the "Changed" filter (D129's
-		// finder), the counter, and the RaceMenu categories as chips that wrap.
-		void DrawSlidersHead()
-		{
-			const auto* style = IG::GetStyle();
-			const float changedW = IG::CalcTextSize("Changed").x + style->FramePadding.x * 2.0f;
-			IG::SetNextItemWidth((std::max)(IG::GetContentRegionAvail().x - changedW - style->ItemSpacing.x, Theme::Px(60.0f)));
-			if (IG::InputTextWithHint("##search", "Search sliders", g_search, sizeof(g_search),
-					IG::ImGuiInputTextFlags_CallbackCharFilter, &DeadKeys::Filter)) {
-				spdlog::info("[smf] search field '{}' hex [{}]", g_search, Hex(g_search));
-			}
-			Rect("search");
-			IG::SameLine();
-			if (ChipDraw("Changed###filter-changed", g_changedOnly)) {
-				g_changedOnly = !g_changedOnly;
-				spdlog::info("[smf] view: changed filter {}", g_changedOnly ? "on" : "off");
-				Common::LayoutSoon();
-			}
-			Rect("filter-changed");
-			IG::SetItemTooltip("Only the sliders that moved since the editor first read them");
-			if (!g_slidersReady) {
-				return;
-			}
-			IG::TextDisabled("%s", Counter(Lower(g_search)).c_str());
-			Rect("row-counter");
-			const float right = IG::GetCursorScreenPos().x + IG::GetContentRegionAvail().x;
-			bool        first = true;
-			for (auto& t : g_tabs) {
-				if (t.rows.empty()) {
-					continue;
-				}
-				const auto id = t.id.empty() ? std::string("general") : t.id;
-				if (g_tab == "\x01") {
-					g_tab = id;
-				}
-				const auto  label = fmt::format("{}###tab-{}", t.label, id);
-				const float w = IG::CalcTextSize(t.label.c_str()).x + style->FramePadding.x * 2.0f;
-				if (!first) {
-					IG::SameLine(0.0f, Theme::Px(4.0f));
-					if (IG::GetCursorScreenPos().x + w > right) {
-						IG::NewLine();
-					}
-				}
-				first = false;
-				if (Chip(label.c_str(), g_tab == id) && g_tab != id) {
-					g_tab = id;
-					spdlog::info("[smf] view: slider category {}", id);
-					Common::LayoutSoon();
-				}
-				Rect("tab:" + id);
-			}
-		}
-
-		void DrawSliders()
-		{
-			if (!g_slidersReady) {
-				IG::TextDisabled("Reading RaceMenu's sliders...");
-				return;
-			}
-			const auto find = Lower(g_search);
-			IG::BeginChild("##rows");
-			Theme::Body();
-			for (auto& t : g_tabs) {
-				const auto id = t.id.empty() ? std::string("general") : t.id;
-				// A search or the filter looks through every category, as the
-				// page's do.
-				if (find.empty() && !g_changedOnly && id != g_tab) {
-					continue;
-				}
-				for (const auto i : t.rows) {
-					auto& s = g_sliders[i];
-					if (!Shows(s, find)) {
-						continue;
-					}
-					DrawRow(s);
-				}
-			}
-			IG::EndChild();
-		}
-
-		// The sections: the belt's categories (.belt-cat), and the small
-		// panel shows the one that is on.
-		constexpr const char* kSectionLabels[] = { "SLIDERS###sec-sliders", "LOOK###sec-look", "RACE & SEX###sec-race",
-			"RACE FACES###sec-faces", "SKIN & TINTS###sec-tints", "PAINT###sec-paint", "OBODY###sec-obody", "PRESETS###sec-presets" };
-		// Settings (D132) is a section of the small panel too, opened from the
-		// footer's button and not from the belt: kSections are the belt's.
-		constexpr const char* kSectionTitles[] = { "Sliders", "Look", "Race & Sex", "Race Faces", "Skin & Tints", "Paint",
-			"OBody", "Presets", "Settings" };
-		constexpr const char* kSectionRects[] = { "sec:sliders", "sec:look", "sec:race", "sec:faces", "sec:tints",
-			"sec:paint", "sec:obody", "sec:presets", "sec:settings" };
-		constexpr int kSections = 8;
-		constexpr int kSectionBody = 6;
-		constexpr int kSectionPresets = 7;
-		constexpr int kSectionSettings = 8;
-		constexpr int kSectionNone = -1;
-
 		// The panel's size (panel.js): the bounds are a guard, the step the
 		// page's.
 		constexpr float kScaleMin = 0.8f;
 		constexpr float kScaleMax = 2.5f;
 		constexpr float kScaleStep = 0.1f;
 
-		void OpenSection(int a_i, const char* a_from)
-		{
-			spdlog::info("[smf] view: section {} ({}){}", kSectionRects[a_i] + 4, a_from, g_section == a_i ? ", already open" : "");
-			g_section = a_i;
-			Common::LayoutSoon();
-		}
-
-		// The OBody section is there only while OBody answers with presets
-		// (body.js); leaving it on when it goes falls back to the first one.
-		bool SectionShown(int a_i)
-		{
-			return a_i != kSectionBody || Skin::BodyPresent();
-		}
-
-		void DrawCategories()
-		{
-			auto* dl = IG::GetWindowDrawList();
-			if (g_section != kSectionNone && !SectionShown(g_section)) {
-				g_section = 0;
-				Common::LayoutSoon();
-			}
-			for (int i = 0; i < kSections; ++i) {
-				if (!SectionShown(i)) {
-					continue;
-				}
-				if (i > 0) {
-					IG::SameLine(0.0f, Theme::Px(2.0f));
-				}
-				const bool on = g_section == i;
-				IG::PushStyleColor(IG::ImGuiCol_Text, on ? Theme::Color::Accent() : Theme::Color::TextDim());
-				IG::PushStyleColor(IG::ImGuiCol_ButtonHovered, IG::ImVec4{ 0.0f, 0.0f, 0.0f, 0.0f });
-				IG::PushStyleColor(IG::ImGuiCol_ButtonActive, IG::ImVec4{ 0.0f, 0.0f, 0.0f, 0.0f });
-				IG::PushStyleVar(IG::ImGuiStyleVar_FrameBorderSize, 0.0f);
-				IG::PushStyleVar(IG::ImGuiStyleVar_FramePadding, IG::ImVec2{ Theme::Px(10.0f), Theme::Px(7.0f) });
-				const bool hit = IG::Button(kSectionLabels[i]);
-				IG::PopStyleVar(2);
-				IG::PopStyleColor(3);
-				const auto a = IG::GetItemRectMin();
-				const auto b = IG::GetItemRectMax();
-				if (on) {
-					const float t = Theme::Px(2.0f);
-					IG::ImDrawListManager::AddRectFilled(dl, IG::ImVec2{ a.x, b.y - t }, IG::ImVec2{ b.x, b.y },
-						IG::ColorConvertFloat4ToU32(Theme::Color::Accent()), 0.0f, 0);
-				} else if (IG::IsItemHovered()) {
-					// .belt-cat:hover lights the word; ImGui has no per-item text hover colour, so a hairline marks it
-					IG::ImDrawListManager::AddRectFilled(dl, IG::ImVec2{ a.x, b.y - 1.0f }, IG::ImVec2{ b.x, b.y },
-						IG::ColorConvertFloat4ToU32(Theme::Color::Text()), 0.0f, 0);
-				}
-				Rect(kSectionRects[i]);
-				if (hit) {
-					// belt.js: a second click on the open category closes the panel
-					g_section = g_section == i ? kSectionNone : i;
-					spdlog::info("[smf] view: section {}", g_section == kSectionNone ? "none (closed by its category)" : kSectionRects[i] + 4);
-					Common::LayoutSoon();
-				}
-			}
-		}
-
-		// The always-visible buttons after the categories (belt.js QUICK, D126):
-		// Presets and OBody open their section from anywhere, Sculpt hands over
-		// to RaceMenu. OBody only while its section exists (D007).
-		void DrawQuick()
-		{
-			struct Quick
-			{
-				const char* label;
-				const char* rect;
-				int         section;
-				const char* send;
-				const char* tip;
-			};
-			static constexpr Quick kQuick[] = {
-				{ "Presets###quick-presets", "quick-presets", kSectionPresets, nullptr, nullptr },
-				{ "OBody###quick-obody", "quick-obody", kSectionBody, nullptr, nullptr },
-				{ "Sculpt###quick-sculpt", "quick-sculpt", -1, "sculpt", "Opens RaceMenu's Sculpt (F4 comes back)" },
-			};
-			IG::SameLine(0.0f, Theme::Px(10.0f));
-			IG::TextDisabled("|");  // .belt-sep
-			for (const auto& q : kQuick) {
-				if (q.section >= 0 && !SectionShown(q.section)) {
-					continue;
-				}
-				IG::SameLine(0.0f, Theme::Px(4.0f));
-				const bool hit = IG::Button(q.label);
-				Rect(q.rect);
-				if (q.tip) {
-					IG::SetItemTooltip("%s", q.tip);
-				}
-				if (!hit) {
-					continue;
-				}
-				if (q.send) {
-					spdlog::info("[smf] view: quick {} - show-racemenu for {}", q.rect + 6, q.send);
-					Send("show-racemenu", { { "for", q.send } });
-				} else {
-					OpenSection(q.section, "quick button");
-				}
-			}
-		}
-
-		// The height "In RaceMenu" takes under Race & Sex: its heading and two
-		// lines a door (the name with Open, the note).
-		float DelegateHeight()
-		{
-			const float n = static_cast<float>(g_doors.size());
-			return IG::GetTextLineHeightWithSpacing() * 2.0f +
-			       n * (IG::GetFrameHeightWithSpacing() + IG::GetTextLineHeightWithSpacing());
-		}
-
 		// "In RaceMenu" (delegate.js): one row a door, Open hands over to
 		// RaceMenu with the door's key (Switcher, RaceMenuTabs::Select). The web
 		// panel keeps it in the Race category, beside the race picker
-		// (groups.js), so here it is under Race & Sex.
+		// (groups.js), and so does this view: a section of its own there (D325).
 		void DrawDelegate()
 		{
-			IG::Separator();
-			Theme::Group("In RaceMenu");
 			const auto* style = IG::GetStyle();
 			const float openW = IG::CalcTextSize("Open").x + style->FramePadding.x * 2.0f;
 			for (const auto& d : g_doors) {
@@ -1101,38 +1053,722 @@ namespace Lifecast::Panel::Smf
 			IG::EndDisabled();
 		}
 
-		void DrawSection()
+		// ----------------------------------------------------------- sections
+		// The page's sections, built by the view from the same data (D325):
+		// the key and title each is mounted under on the page, the group
+		// groups.js gives that key, and the rows the page counts in it
+		// (".slider", belt.js). A category of the belt shows ONE of its
+		// sections at a time, with the others as chips (belt.js, D119, D316).
+		enum class RegionKind
 		{
-			switch (g_section) {
-			case 0:
-				DrawSliders();
+			kComposite,  // film rows, look controls and tint layers (sliders.js, look.js, tints.js)
+			kMorphNone,
+			kRacePresets,
+			kTints,
+			kArea,
+			kSex,
+			kRace,
+			kDelegate,
+			kObody,
+			kPresets
+		};
+
+		struct Region
+		{
+			std::string   key;
+			std::string   title;
+			RegionKind          kind = RegionKind::kComposite;
+			std::string   part;  // kArea: the paint area's key
+			int           group = Groups::kNone;
+			int           rank = 0;
+			std::uint32_t mounted = 0;
+			int           rows = 0;
+		};
+
+		// The sections that exist from the start and take look controls and
+		// tint layers: look.js SECTIONS and FACE_LISTS, and the face parts
+		// sliders.js slots. Inside one: the game's sliders, the look's
+		// controls, the tab's sliders, then the tint layers (the page's
+		// order: sliders.js head, look.js, sliders.js tail, tints.js).
+		struct FixedSection
+		{
+			const char* key;
+			const char* title;
+			const char* look[3];
+		};
+		constexpr FixedSection kFixedSections[] = {
+			{ "look:Body", "Weight", { "weight" } },
+			{ "look:Hair", "Hair", { "hair", "hair-color", "facial-hair" } },
+			{ "look:Features", "Features", { "scar", "complexion" } },
+			{ "face:Nose", "Nose", { "nose-type" } },
+			{ "face:Jaw", "Jaw", {} },
+			{ "face:Cheekbones", "Cheekbones", {} },
+			{ "face:Eyes", "Eyes", { "eye-shape", "eyes" } },
+			{ "face:Brows", "Brows", { "brows" } },
+			{ "face:Mouth", "Mouth", { "mouth-shape" } },
+			{ "face:Chin", "Chin", {} },
+		};
+
+		const FixedSection* FixedOf(std::string_view a_key)
+		{
+			for (const auto& f : kFixedSections) {
+				if (a_key == f.key) {
+					return &f;
+				}
+			}
+			return nullptr;
+		}
+
+		// tints.js HOME: the layers that sit in the section of the part of the
+		// face they colour; the rest stay in Skin & Tints.
+		struct TintHome
+		{
+			const char* layer;
+			const char* section;
+		};
+		constexpr TintHome kTintHome[] = {
+			{ "lips", "face:Mouth" },
+			{ "cheeks", "face:Cheekbones" },
+			{ "cheeks-lower", "face:Cheekbones" },
+			{ "eye-socket-upper", "face:Eyes" },
+			{ "eye-socket-lower", "face:Eyes" },
+			{ "eyeliner", "face:Eyes" },
+			{ "nose", "face:Nose" },
+			{ "chin", "face:Chin" },
+		};
+
+		std::string_view TintHomeOf(std::string_view a_layer)
+		{
+			for (const auto& h : kTintHome) {
+				if (a_layer == h.layer) {
+					return h.section;
+				}
+			}
+			return "tints";
+		}
+
+		// overlays.js SECTION_KEY: face paint goes with the face's key, so that
+		// groups.js puts it in Skin & Paint by name.
+		std::string AreaKey(const std::string& a_area)
+		{
+			return a_area == "body" ? "overlay:body" :
+			       a_area == "hand" ? "overlay:hand" :
+			       a_area == "foot" ? "overlay:foot" :
+			       a_area == "face" ? "face:paint" :
+			                          "overlay:" + a_area;
+		}
+
+		// sliders.js NONE_AFTER_MS: no mod tab is believed only after six
+		// seconds of none.
+		bool MorphNone()
+		{
+			return g_slidersReady && g_noneArmed && Clock::now() - g_noneSince >= std::chrono::seconds(6);
+		}
+
+		constexpr const char* kEmptyTab =
+			"RaceMenu has this tab and it holds nothing right now. What goes in it is the mod's own decision - some add "
+			"theirs for one sex only.";
+		constexpr const char* kNoMorphs =
+			"There are no body morph sliders in this installation: no mod has added any to RaceMenu. A mod that adds them "
+			"for one sex only shows nothing here for the other.";
+
+		// Every section there is now, in the page's order (controls.js
+		// arrange(): setOrder's rank, then the mounting order). Built every
+		// frame from the modules' state: tens of entries.
+		std::vector<Region> Regions()
+		{
+			std::vector<Region> out;
+			const auto          tints = Skin::TintLayers();
+			auto add = [&](const std::string& a_key, const std::string& a_title, RegionKind a_kind, int a_rows,
+						   const std::string& a_part = std::string()) {
+				Region r;
+				r.key = a_key;
+				r.title = a_title;
+				r.kind = a_kind;
+				r.part = a_part;
+				r.group = Groups::Of(a_key);
+				r.rank = Groups::Rank(a_key);
+				r.mounted = Mount(a_key);
+				r.rows = a_rows;
+				out.push_back(std::move(r));
+			};
+			for (const auto& f : kFixedSections) {
+				int rows = FilmRows(FilmOf(f.key));
+				for (const auto* l : f.look) {
+					rows += l ? 1 : 0;
+				}
+				for (const auto& t : tints) {
+					rows += TintHomeOf(t.key) == f.key ? t.rows : 0;
+				}
+				add(f.key, f.title, RegionKind::kComposite, rows);
+			}
+			int own = 0;
+			for (const auto& t : tints) {
+				own += TintHomeOf(t.key) == "tints" ? t.rows : 0;
+			}
+			add("tints", "Skin & Tints", RegionKind::kTints, own);
+			for (const auto& a : Skin::PaintAreas()) {
+				add(AreaKey(a.key), a.label, RegionKind::kArea, a.rows, a.key);
+			}
+			add("face:RacePresets", "Face Presets", RegionKind::kRacePresets, 1);
+			add("race", "Race", RegionKind::kRace, 0);
+			add("sex", "Sex", RegionKind::kSex, 0);
+			if (Skin::BodyPresent()) {
+				add("obody", "OBody", RegionKind::kObody, 0);
+			}
+			for (const auto& f : g_film) {
+				const int rows = FilmRows(&f);
+				if (!FixedOf(f.key) && (rows > 0 || f.modTab)) {
+					add(f.key, f.title, RegionKind::kComposite, rows);
+				}
+			}
+			if (MorphNone()) {
+				add("morph:none", "Body morphs", RegionKind::kMorphNone, 0);
+			}
+			add("presets", "Presets", RegionKind::kPresets, 0);
+			add("delegate", "In RaceMenu", RegionKind::kDelegate, 0);
+			std::stable_sort(out.begin(), out.end(), [](const Region& a, const Region& b) {
+				return a.rank != b.rank ? a.rank < b.rank : a.mounted < b.mounted;
+			});
+			return out;
+		}
+
+		std::vector<const Region*> InGroup(const std::vector<Region>& a_all, int a_group)
+		{
+			std::vector<const Region*> in;
+			for (const auto& r : a_all) {
+				if (r.group == a_group) {
+					in.push_back(&r);
+				}
+			}
+			return in;
+		}
+
+		// The belt's categories one after the other (a group shows up once,
+		// where its first section falls - controls.js arrange()).
+		std::vector<const Region*> InBeltOrder(const std::vector<Region>& a_all)
+		{
+			std::vector<const Region*> in;
+			for (int g = 0; g < Groups::kBelt; ++g) {
+				const auto part = InGroup(a_all, g);
+				in.insert(in.end(), part.begin(), part.end());
+			}
+			return in;
+		}
+
+		// What the search field holds, as search.js reads it: trimmed, lower case.
+		std::string Find()
+		{
+			std::string s = Lower(g_search);
+			const auto  a = s.find_first_not_of(' ');
+			if (a == std::string::npos) {
+				return std::string();
+			}
+			return s.substr(a, s.find_last_not_of(' ') - a + 1);
+		}
+
+		bool Filtering()
+		{
+			return g_changedOnly || !Find().empty();
+		}
+
+		// search.js: a row shows when its name or its section's title holds
+		// the words, and, with the filter on, when it moved. The view's search
+		// and filter look at the film's sliders (D313).
+		bool Shows(const Slider& a_s, const std::string& a_find, bool a_titleHit)
+		{
+			return (a_find.empty() || a_titleHit || a_s.lower.find(a_find) != std::string::npos) &&
+			       (!g_changedOnly || Changed(a_s));
+		}
+
+		bool TitleHit(const Region& a_r, const std::string& a_find)
+		{
+			return !a_find.empty() && Lower(a_r.title).find(a_find) != std::string::npos;
+		}
+
+		// The counter (search.js), shown while more than one section is on
+		// screen (All, a search, Changed - belt.js). "N changed of M" with the
+		// filter, "M of T sliders" with a search - over the sliders those
+		// reach (D313) -, "T sliders in S sections" otherwise, T being every
+		// row the page counts (D325). Logged once per change.
+		std::string Counter(const std::vector<Region>& a_all, const std::string& a_find)
+		{
+			std::string text;
+			std::string shown;
+			if (!a_find.empty() || g_changedOnly) {
+				std::size_t total = 0;
+				std::size_t matched = 0;
+				std::size_t changedMatched = 0;
+				std::size_t named = 0;
+				for (const auto* r : InBeltOrder(a_all)) {
+					const Film* f = FilmOf(r->key);
+					if (!f) {
+						continue;
+					}
+					const bool hit = TitleHit(*r, a_find);
+					auto       count = [&](std::size_t a_i) {
+						const auto& s = g_sliders[a_i];
+						++total;
+						if (!a_find.empty() && !hit && s.lower.find(a_find) == std::string::npos) {
+							return;
+						}
+						++matched;
+						changedMatched += Changed(s) ? 1 : 0;
+						if (Shows(s, a_find, hit) && named < 12) {
+							shown += fmt::format("{}'{}'", named++ ? ", " : "", s.shown);
+						}
+					};
+					for (const auto i : f->head) {
+						count(i);
+					}
+					for (const auto i : f->rows) {
+						count(i);
+					}
+				}
+				text = g_changedOnly ? fmt::format("{} changed of {}", changedMatched, matched) :
+				                       fmt::format("{} of {} sliders", matched, total);
+			} else {
+				int total = 0;
+				int sections = 0;
+				for (const auto* r : InBeltOrder(a_all)) {
+					total += r->rows;
+					sections += r->rows > 0 ? 1 : 0;
+				}
+				text = fmt::format("{} sliders in {} sections", total, sections);
+			}
+			if (const auto key = text + "|" + a_find + "|" + shown; key != g_counterFor) {
+				g_counterFor = key;
+				spdlog::info("[smf] view: sliders counter '{}' (search '{}', changed filter {}){}{}", text, a_find,
+					g_changedOnly ? "on" : "off", shown.empty() ? "" : " - rows shown: ", shown);
+			}
+			return text;
+		}
+
+		// The head of a belt category: the search and the "Changed" filter
+		// (D129's finder, D313), and the counter when more than one section
+		// is on screen.
+		void DrawSearchHead(const std::vector<Region>& a_all, bool a_wide)
+		{
+			const auto* style = IG::GetStyle();
+			const float changedW = IG::CalcTextSize("Changed").x + style->FramePadding.x * 2.0f;
+			IG::SetNextItemWidth((std::max)(IG::GetContentRegionAvail().x - changedW - style->ItemSpacing.x, Theme::Px(60.0f)));
+			if (IG::InputTextWithHint("##search", "Search sliders", g_search, sizeof(g_search),
+					IG::ImGuiInputTextFlags_CallbackCharFilter, &DeadKeys::Filter)) {
+				spdlog::info("[smf] search field '{}' hex [{}]", g_search, Hex(g_search));
+			}
+			Rect("search");
+			IG::SameLine();
+			if (ChipDraw("Changed###filter-changed", g_changedOnly)) {
+				g_changedOnly = !g_changedOnly;
+				spdlog::info("[smf] view: changed filter {}", g_changedOnly ? "on" : "off");
+				Common::LayoutSoon();
+			}
+			Rect("filter-changed");
+			IG::SetItemTooltip("Only the sliders that moved since the editor first read them");
+			if (a_wide && g_slidersReady) {
+				IG::TextDisabled("%s", Counter(a_all, Find()).c_str());
+				Rect("row-counter");
+			}
+		}
+
+		void DrawComposite(const Region& a_r)
+		{
+			const FixedSection* fixed = FixedOf(a_r.key);
+			const Film*  film = FilmOf(a_r.key);
+			if (!g_slidersReady && !fixed) {
+				IG::TextDisabled("Reading RaceMenu's sliders...");
+				return;
+			}
+			if (film) {
+				for (const auto i : film->head) {
+					DrawRow(g_sliders[i]);
+				}
+			}
+			if (fixed && fixed->look[0] && !Face::LookReady()) {
+				IG::TextDisabled("Reading the character's look...");
+			}
+			if (fixed) {
+				for (const auto* l : fixed->look) {
+					if (l) {
+						Face::DrawLookRow(l);
+					}
+				}
+			}
+			if (film) {
+				for (const auto i : film->rows) {
+					DrawRow(g_sliders[i]);
+				}
+			}
+			for (const auto& t : Skin::TintLayers()) {
+				if (TintHomeOf(t.key) == a_r.key) {
+					Skin::DrawTintLayer(t.key);
+				}
+			}
+			if (film && film->modTab && FilmRows(film) == 0) {
+				IG::TextWrapped("%s", kEmptyTab);
+			}
+		}
+
+		void DrawOwnTints()
+		{
+			bool any = false;
+			for (const auto& t : Skin::TintLayers()) {
+				if (TintHomeOf(t.key) == "tints") {
+					Skin::DrawTintLayer(t.key);
+					any = true;
+				}
+			}
+			if (!any) {
+				Skin::DrawTintStatus();
+			}
+		}
+
+		// One section. a_flat: drawn among others (All), so a list inside it
+		// takes a height of its own instead of what is left of the panel.
+		void DrawRegion(const Region& a_r, bool a_flat)
+		{
+			const float list = a_flat ? Theme::Px(220.0f) : 0.0f;
+			IG::PushID(a_r.key.c_str());
+			switch (a_r.kind) {
+			case RegionKind::kComposite:
+				DrawComposite(a_r);
 				break;
-			case 1:
-				Face::DrawLook();
+			case RegionKind::kMorphNone:
+				IG::TextWrapped("%s", kNoMorphs);
 				break;
-			case 2:
-				Face::DrawRaceSex(DelegateHeight());
+			case RegionKind::kRacePresets:
+				Face::DrawRacePresets(list);
+				break;
+			case RegionKind::kTints:
+				DrawOwnTints();
+				break;
+			case RegionKind::kArea:
+				Skin::DrawPaintArea(a_r.part);
+				break;
+			case RegionKind::kSex:
+				Face::DrawSex();
+				break;
+			case RegionKind::kRace:
+				Face::DrawRace(list);
+				break;
+			case RegionKind::kDelegate:
 				DrawDelegate();
 				break;
-			case kSectionSettings:
-				DrawSettings();
+			case RegionKind::kObody:
+				Skin::DrawBody(list);
 				break;
-			case 3:
-				Face::DrawRacePresets();
-				break;
-			case 4:
-				Skin::DrawTints();
-				break;
-			case 5:
-				Skin::DrawPaint();
-				break;
-			case 6:
-				Skin::DrawBody();
-				break;
-			default:
-				Presets::DrawSection();
+			case RegionKind::kPresets:
 				break;
 			}
+			IG::PopID();
+		}
+
+		// A search or the filter: every section with a slider that matches,
+		// under its title (search.js), in the belt's order.
+		void DrawResults(const std::vector<Region>& a_all, const std::string& a_find)
+		{
+			bool any = false;
+			for (const auto* r : InBeltOrder(a_all)) {
+				const Film* f = FilmOf(r->key);
+				if (!f) {
+					continue;
+				}
+				const bool hit = TitleHit(*r, a_find);
+				bool       headed = false;
+				auto       row = [&](std::size_t a_i) {
+					auto& s = g_sliders[a_i];
+					if (!Shows(s, a_find, hit)) {
+						return;
+					}
+					if (!headed) {
+						Theme::Group(r->title.c_str());
+						headed = true;
+					}
+					DrawRow(s);
+				};
+				for (const auto i : f->head) {
+					row(i);
+				}
+				for (const auto i : f->rows) {
+					row(i);
+				}
+				any = any || headed;
+			}
+			if (!any) {
+				IG::TextDisabled("No slider matches.");
+			}
+		}
+
+		// All: every section of the belt's categories, one under the other; a
+		// category's heading only when it has more than one (controls.js).
+		void DrawAll(const std::vector<Region>& a_all)
+		{
+			for (int g = 0; g < Groups::kBelt; ++g) {
+				const auto in = InGroup(a_all, g);
+				if (in.size() > 1) {
+					Theme::SectionTitle(Groups::Title(g));
+				}
+				for (const auto* r : in) {
+					Theme::Group(r->title.c_str());
+					DrawRegion(*r, true);
+					IG::Separator();
+				}
+			}
+		}
+
+		// belt.js choose(): a category re-opens on the section last shown in
+		// it, else on its first.
+		std::string KeptRegion(const std::vector<const Region*>& a_in, int a_cat)
+		{
+			const auto& kept = g_lastRegion[a_cat];
+			for (const auto* r : a_in) {
+				if (r->key == kept) {
+					return kept;
+				}
+			}
+			return a_in.empty() ? std::string() : a_in.front()->key;
+		}
+
+		const char* CategoryName(int a_cat)
+		{
+			return a_cat == kCatAll ? "All" : a_cat == kCatNone ? "none" : Groups::Title(a_cat);
+		}
+
+		void LogCategory(const std::vector<Region>& a_all, const char* a_from)
+		{
+			const auto  in = g_cat == kCatAll ? InBeltOrder(a_all) : InGroup(a_all, g_cat);
+			std::string list;
+			for (const auto* r : in) {
+				list += fmt::format("{}{} {}", list.empty() ? "" : ", ", r->key, r->rows);
+			}
+			spdlog::info("[smf] category {}: {} | region {} ({})", CategoryName(g_cat), list.empty() ? "no section" : list,
+				g_cat == kCatAll ? "all" : g_region.empty() ? "none" : g_region, a_from);
+		}
+
+		// belt.js choose(): a second click on the open category closes it.
+		void ChooseCategory(const std::vector<Region>& a_all, int a_cat, const char* a_from)
+		{
+			if (a_cat == kCatAll) {
+				g_cat = g_cat == kCatAll ? kCatNone : kCatAll;
+			} else {
+				g_cat = g_cat == a_cat ? kCatNone : a_cat;
+				if (g_cat != kCatNone) {
+					g_region = KeptRegion(InGroup(a_all, g_cat), g_cat);
+				}
+			}
+			if (g_cat == kCatNone) {
+				spdlog::info("[smf] view: category none (closed by its {})", a_from);
+			} else {
+				LogCategory(a_all, a_from);
+			}
+			Common::LayoutSoon();
+		}
+
+		// belt.js openRegion(): one section of one category, from a quick
+		// button; pressed again, closes.
+		void OpenRegion(const std::vector<Region>& a_all, int a_cat, const std::string& a_key, const char* a_from)
+		{
+			if (g_cat == a_cat && g_region == a_key) {
+				g_cat = kCatNone;
+				spdlog::info("[smf] view: category none (closed by its {})", a_from);
+			} else {
+				g_cat = a_cat;
+				g_region = a_key;
+				g_lastRegion[a_cat] = a_key;
+				LogCategory(a_all, a_from);
+			}
+			Common::LayoutSoon();
+		}
+
+		// Settings (D132, D312) opens from the footer's button.
+		void OpenSettings()
+		{
+			spdlog::info("[smf] category Settings: debug (footer button){}", g_cat == Groups::kSettings ? ", already open" : "");
+			g_cat = Groups::kSettings;
+			Common::LayoutSoon();
+		}
+
+		// The sister sections as chips at the head of the region (belt.js
+		// #regions), wrapping.
+		void DrawRegionChips(const std::vector<const Region*>& a_in)
+		{
+			const auto* style = IG::GetStyle();
+			const float right = IG::GetCursorScreenPos().x + IG::GetContentRegionAvail().x;
+			bool        first = true;
+			for (const auto* r : a_in) {
+				const float w = IG::CalcTextSize(r->title.c_str()).x + style->FramePadding.x * 2.0f;
+				if (!first) {
+					IG::SameLine(0.0f, Theme::Px(4.0f));
+					if (IG::GetCursorScreenPos().x + w > right) {
+						IG::NewLine();
+					}
+				}
+				first = false;
+				const auto label = fmt::format("{}###region-{}", r->title, r->key);
+				if (Chip(label.c_str(), g_region == r->key) && g_region != r->key) {
+					g_region = r->key;
+					g_lastRegion[g_cat] = r->key;
+					spdlog::info("[smf] view: region {} ({} rows, chip)", r->key, r->rows);
+					Common::LayoutSoon();
+				}
+				Rect("region:" + r->key);
+			}
+		}
+
+		std::string Upper(std::string a_s)
+		{
+			for (auto& c : a_s) {
+				c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+			}
+			return a_s;
+		}
+
+		constexpr const char* kCatRects[] = { "cat:skin-paint", "cat:morphs", "cat:head", "cat:body", "cat:race", "cat:all" };
+
+		// The belt's categories (.belt-cat), groups.js's names and All, each
+		// with its number (belt.js: the ".slider" rows of its sections; none
+		// written for zero). The line is logged whenever it changes, and on
+		// every open of the view.
+		void DrawCategories(const std::vector<Region>& a_all)
+		{
+			int counts[Groups::kBelt + 1] = {};
+			for (const auto& r : a_all) {
+				if (r.group >= 0 && r.group < Groups::kBelt) {
+					counts[r.group] += r.rows;
+				}
+				counts[Groups::kBelt] += r.rows;
+			}
+			std::string line;
+			for (int i = 0; i <= Groups::kBelt; ++i) {
+				line += fmt::format("{}{} {}", i ? ", " : "", i == Groups::kBelt ? "All" : Groups::Title(i), counts[i]);
+			}
+			line += Skin::BodyPresent() ? "; quick Presets, OBody, Sculpt" : "; quick Presets, Sculpt";
+			if (line != g_beltFor) {
+				g_beltFor = line;
+				spdlog::info("[smf] belt: {}", line);
+			}
+
+			auto* dl = IG::GetWindowDrawList();
+			for (int i = 0; i <= Groups::kBelt; ++i) {
+				const int  cat = i == Groups::kBelt ? kCatAll : i;
+				const auto name = Upper(i == Groups::kBelt ? "All" : Groups::Title(i));
+				const auto label = counts[i] > 0 ? fmt::format("{}  {}###{}", name, counts[i], kCatRects[i]) :
+				                                   fmt::format("{}###{}", name, kCatRects[i]);
+				if (i > 0) {
+					IG::SameLine(0.0f, Theme::Px(2.0f));
+				}
+				const bool on = g_cat == cat;
+				IG::PushStyleColor(IG::ImGuiCol_Text, on ? Theme::Color::Accent() : Theme::Color::TextDim());
+				IG::PushStyleColor(IG::ImGuiCol_ButtonHovered, IG::ImVec4{ 0.0f, 0.0f, 0.0f, 0.0f });
+				IG::PushStyleColor(IG::ImGuiCol_ButtonActive, IG::ImVec4{ 0.0f, 0.0f, 0.0f, 0.0f });
+				IG::PushStyleVar(IG::ImGuiStyleVar_FrameBorderSize, 0.0f);
+				IG::PushStyleVar(IG::ImGuiStyleVar_FramePadding, IG::ImVec2{ Theme::Px(10.0f), Theme::Px(7.0f) });
+				const bool hit = IG::Button(label.c_str());
+				IG::PopStyleVar(2);
+				IG::PopStyleColor(3);
+				const auto a = IG::GetItemRectMin();
+				const auto b = IG::GetItemRectMax();
+				if (on) {
+					const float t = Theme::Px(2.0f);
+					IG::ImDrawListManager::AddRectFilled(dl, IG::ImVec2{ a.x, b.y - t }, IG::ImVec2{ b.x, b.y },
+						IG::ColorConvertFloat4ToU32(Theme::Color::Accent()), 0.0f, 0);
+				} else if (IG::IsItemHovered()) {
+					// .belt-cat:hover lights the word; ImGui has no per-item text hover colour, so a hairline marks it
+					IG::ImDrawListManager::AddRectFilled(dl, IG::ImVec2{ a.x, b.y - 1.0f }, IG::ImVec2{ b.x, b.y },
+						IG::ColorConvertFloat4ToU32(Theme::Color::Text()), 0.0f, 0);
+				}
+				Rect(kCatRects[i]);
+				if (hit) {
+					ChooseCategory(a_all, cat, "category button");
+				}
+			}
+		}
+
+		// The always-visible buttons after the categories (belt.js QUICK, D126,
+		// D312): Presets opens its section from anywhere, OBody the Body
+		// category on its OBody section (only while that section exists,
+		// D007), Sculpt hands over to RaceMenu.
+		void DrawQuick(const std::vector<Region>& a_all)
+		{
+			IG::SameLine(0.0f, Theme::Px(10.0f));
+			IG::TextDisabled("|");  // .belt-sep
+			IG::SameLine(0.0f, Theme::Px(4.0f));
+			if (IG::Button("Presets###quick-presets")) {
+				OpenRegion(a_all, Groups::kPresets, "presets", "quick button");
+			}
+			Rect("quick-presets");
+			if (Skin::BodyPresent()) {
+				IG::SameLine(0.0f, Theme::Px(4.0f));
+				if (IG::Button("OBody###quick-obody")) {
+					OpenRegion(a_all, Groups::kBody, "obody", "quick button");
+				}
+				Rect("quick-obody");
+			}
+			IG::SameLine(0.0f, Theme::Px(4.0f));
+			const bool sculpt = IG::Button("Sculpt###quick-sculpt");
+			Rect("quick-sculpt");
+			IG::SetItemTooltip("%s", "Opens RaceMenu's Sculpt (F4 comes back)");
+			if (sculpt) {
+				spdlog::info("[smf] view: quick sculpt - show-racemenu for sculpt");
+				Send("show-racemenu", { { "for", "sculpt" } });
+			}
+		}
+
+		// The small panel: the category's title, the finder, the sister
+		// sections as chips and the one shown (belt.js apply()). All, a search
+		// and Changed show every section at once (wide). Presets and Settings
+		// are drawn by their own code.
+		void DrawPanel(const std::vector<Region>& a_all)
+		{
+			const bool belt = g_cat == kCatAll || (g_cat >= 0 && g_cat < Groups::kBelt);
+			const bool filtering = Filtering();
+			const bool wide = belt && (g_cat == kCatAll || filtering);
+			Theme::SectionTitle(CategoryName(g_cat));
+			if (g_helloed && !g_compatible) {
+				IG::TextColored(Theme::Color::Bad(), "This view and the DLL speak different protocol versions.");
+			}
+			if (!belt) {
+				IG::Separator();
+				if (g_cat == Groups::kSettings) {
+					DrawSettings();
+				} else {
+					Presets::DrawSection();
+				}
+				return;
+			}
+			DrawSearchHead(a_all, wide);
+			const Region* shown = nullptr;
+			if (!wide) {
+				const auto in = InGroup(a_all, g_cat);
+				bool       there = false;
+				for (const auto* r : in) {
+					there = there || r->key == g_region;
+				}
+				if (!there) {
+					g_region = KeptRegion(in, g_cat);
+				}
+				if (!g_region.empty()) {
+					g_lastRegion[g_cat] = g_region;
+				}
+				DrawRegionChips(in);
+				for (const auto* r : in) {
+					shown = r->key == g_region ? r : shown;
+				}
+			}
+			IG::Separator();
+			IG::BeginChild("##region");
+			Theme::Body();
+			if (filtering) {
+				DrawResults(a_all, Find());
+			} else if (g_cat == kCatAll) {
+				DrawAll(a_all);
+			} else if (shown) {
+				Theme::Group(shown->title.c_str());
+				DrawRegion(*shown, false);
+			} else {
+				IG::TextDisabled("Reading RaceMenu's sliders...");
+			}
+			IG::EndChild();
 		}
 
 		// stage.js pointerdown: what a press with this button and these keys
@@ -1499,7 +2135,6 @@ namespace Lifecast::Panel::Smf
 			++g_categoriesSinceShown;
 			if (data.value("ready", false) && data.contains("entries") && data["entries"].is_array()) {
 				g_categories = data["entries"];
-				ApplyOrder();
 				BuildDoors();
 				if (g_visible && g_categoriesSinceShown > 1) {
 					AskLookAfterFilm("RaceMenu categories", g_categories.size());
@@ -1618,7 +2253,7 @@ namespace Lifecast::Panel::Smf
 		const float col = std::round((std::min)(Theme::Px(430.0f), dw * 0.34f));      // --panel-col
 		const float panelH = std::round((std::min)(dh * 0.64f, dh - beltH - gap));    // --panel-tall, the panel always open
 		const float beltY = dh - beltH;
-		const bool  open = g_section != kSectionNone;
+		const bool  open = g_cat != kCatNone;
 		// .stage: the open small panel takes its width off the stage
 		const float stageL = (open ? col : 0.0f) + 2.0f * gap;
 		const float stageT = 2.0f * gap;
@@ -1627,6 +2262,7 @@ namespace Lifecast::Panel::Smf
 		const auto  border = IG::ColorConvertFloat4ToU32(Theme::Color::PanelBorder());
 		g_layout.clear();
 		g_havePopup = false;
+		const auto regions = Regions();
 
 		// The stage: a frame only (.stage), on the background list - under every window.
 		if (g_stageVisible) {
@@ -1652,15 +2288,7 @@ namespace Lifecast::Panel::Smf
 			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ b.x0, b.y0 + 0.5f }, IG::ImVec2{ b.x1, b.y0 + 0.5f }, border, 1.0f);
 			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ b.x1 - 0.5f, b.y0 }, IG::ImVec2{ b.x1 - 0.5f, b.y1 }, border, 1.0f);
 
-			Theme::SectionTitle(kSectionTitles[g_section]);
-			if (g_helloed && !g_compatible) {
-				IG::TextColored(Theme::Color::Bad(), "This view and the DLL speak different protocol versions.");
-			}
-			if (g_section == 0) {
-				DrawSlidersHead();
-			}
-			IG::Separator();
-			DrawSection();
+			DrawPanel(regions);
 			IG::End();
 		}
 
@@ -1688,8 +2316,8 @@ namespace Lifecast::Panel::Smf
 			// .belt-cats
 			const float rowY = beltY + (beltH - IG::GetFrameHeight()) * 0.5f;
 			IG::SetCursorScreenPos(IG::ImVec2{ col + pad, rowY });
-			DrawCategories();
-			DrawQuick();
+			DrawCategories(regions);
+			DrawQuick(regions);
 			const float catsEnd = IG::GetItemRectMax().x + pad;
 			IG::ImDrawListManager::AddLine(dl, IG::ImVec2{ catsEnd - 0.5f, b.y0 }, IG::ImVec2{ catsEnd - 0.5f, b.y1 }, border, 1.0f);
 
@@ -1734,7 +2362,7 @@ namespace Lifecast::Panel::Smf
 			}
 			Rect("settings-button");
 			if (settingsHit) {
-				OpenSection(kSectionSettings, "footer button");
+				OpenSettings();
 			}
 			IG::SameLine();
 			IG::TextDisabled("F4  RaceMenu");
@@ -1841,15 +2469,12 @@ namespace Lifecast::Panel::Smf
 	void LogState(const char* a_what)
 	{
 		std::lock_guard l(g_mx);
-		spdlog::info("[smf] view {}: visible {}, card {}, form {}, sliders {} in {} tabs (ready {}), stage ready {} free {} "
+		spdlog::info("[smf] view {}: visible {}, card {}, form {}, sliders {} from {} tabs in {} sections (ready {}), stage ready {} free {} "
 					 "turn {:.1f} distance {:.1f}, zoom asked {} | received {}, not drawn {}, sent {}",
-			a_what, g_visible, g_card, g_hybrid ? "hybrid" : "all", g_sliders.size(), g_tabs.size(), g_slidersReady,
+			a_what, g_visible, g_card, g_hybrid ? "hybrid" : "all", g_sliders.size(), g_tabs.size(), g_film.size(), g_slidersReady,
 			g_stage.ready, g_stage.free, g_stage.turn, g_stage.distance, g_zooms, g_received, g_ignored, g_sent);
-		if (g_section == kSectionNone) {
-			spdlog::info("[smf] view {}: section none", a_what);
-		} else {
-			spdlog::info("[smf] view {}: section {}", a_what, g_section);
-		}
+		spdlog::info("[smf] view {}: category {}, region {}", a_what, CategoryName(g_cat),
+			g_cat == kCatNone || g_cat == kCatAll ? "-" : g_region.empty() ? "none" : g_region);
 		spdlog::info("[smf] view stage ({}): ready {}, free {}, forced {}, lock {}, tilt {} ({:.1f} deg), turn {:.1f}, "
 					 "distance {:.1f}, lift {:.1f}, pan {:.1f}, visible {}, {} drag(s) ({} from the game's input), {} wheel(s)",
 			a_what, g_stage.ready, g_stage.free, g_stage.forced, g_stage.lock, g_stage.tilt, g_stage.tiltDeg, g_stage.turn,

@@ -305,31 +305,6 @@ namespace Lifecast::Panel::Smf::Skin
 			return send;
 		}
 
-		void Chips(const std::vector<std::pair<std::string, std::string>>& a_items, std::string& a_on,
-			const char* a_rectPrefix, const char* a_what)
-		{
-			const auto* style = IG::GetStyle();
-			const float right = IG::GetCursorScreenPos().x + IG::GetContentRegionAvail().x;
-			bool        first = true;
-			for (const auto& [key, label] : a_items) {
-				const float w = IG::CalcTextSize(label.c_str()).x + style->FramePadding.x * 2.0f;
-				if (!first) {
-					IG::SameLine(0.0f, Theme::Px(4.0f));
-					if (IG::GetCursorScreenPos().x + w > right) {
-						IG::NewLine();
-					}
-				}
-				first = false;
-				const auto id = fmt::format("{}###{}{}", label, a_rectPrefix, key);
-				if (Common::Chip(id.c_str(), a_on == key) && a_on != key) {
-					a_on = key;
-					spdlog::info("[smf] view: {} {}", a_what, key);
-					Common::LayoutSoon();
-				}
-				Rect(fmt::format("{}{}", a_rectPrefix, key));
-			}
-		}
-
 		// -------------------------------------------------------------- tints
 
 		struct Tint
@@ -868,71 +843,69 @@ namespace Lifecast::Panel::Smf::Skin
 		Send("overlays-get");
 	}
 
-	void DrawTints()
+	bool TintsReady()
 	{
-		if (!g_tintsReady) {
-			IG::TextDisabled("Reading the tint layers...");
-			return;
-		}
-		if (g_tints.empty()) {
-			IG::TextDisabled("This character has no tint layers.");
-			return;
-		}
-		std::vector<std::pair<std::string, std::string>> chips;
+		return g_tintsReady;
+	}
+
+	std::vector<Part> TintLayers()
+	{
+		std::vector<Part> out;
 		for (const auto& t : g_tints) {
-			chips.emplace_back(t.k, t.label);
+			out.push_back({ t.k, t.label, 4 + (t.pick ? 1 : 0) + (t.hasCatalog ? 1 : 0) });
 		}
-		Chips(chips, g_tintOn, "tl:", "tint layer");
-		IG::Separator();
-		IG::BeginChild("##tints");
-		Theme::Body();
+		return out;
+	}
+
+	std::vector<Part> PaintAreas()
+	{
+		std::vector<Part> out;
+		for (const auto& a : g_areas) {
+			out.push_back({ a.k, a.label, 3 * static_cast<int>(a.layers.size()) });
+		}
+		return out;
+	}
+
+	void DrawTintLayer(const std::string& a_key)
+	{
 		for (auto& t : g_tints) {
-			if (t.k == g_tintOn) {
+			if (t.k == a_key) {
 				IG::PushID(t.k.c_str());
 				DrawTint(t);
 				IG::PopID();
+				return;
 			}
 		}
-		IG::EndChild();
 	}
 
-	void DrawPaint()
+	void DrawTintStatus()
 	{
-		if (!g_overlaysReady || g_areas.empty()) {
-			IG::TextDisabled(g_overlaysReady ? "This character has no paint layers." : "Reading the paint layers...");
-			return;
+		if (!g_tintsReady) {
+			IG::TextDisabled("Reading the tint layers...");
+		} else if (g_tints.empty()) {
+			IG::TextDisabled("This character has no tint layers.");
 		}
-		std::vector<std::pair<std::string, std::string>> chips;
-		for (const auto& a : g_areas) {
-			chips.emplace_back(a.k, a.label);
-		}
-		Chips(chips, g_areaOn, "pa:", "paint area");
-		auto it = std::find_if(g_areas.begin(), g_areas.end(), [](const Area& a) { return a.k == g_areaOn; });
-		if (it == g_areas.end() || it->layers.empty()) {
+	}
+
+	void DrawPaintArea(const std::string& a_key)
+	{
+		const auto it = std::find_if(g_areas.begin(), g_areas.end(), [&](const Area& a) { return a.k == a_key; });
+		if (it == g_areas.end()) {
 			return;
 		}
 		auto& area = *it;
-		std::vector<std::pair<std::string, std::string>> layers;
-		for (const auto& l : area.layers) {
-			layers.emplace_back(std::to_string(l.i), fmt::format("Layer {}{}", l.i + 1, l.Painted() ? " *" : ""));
+		if (area.layers.empty()) {
+			IG::TextDisabled("This area has no paint layers.");
+			return;
 		}
-		auto on = std::to_string(area.layers[(std::clamp)(area.on, 0, static_cast<int>(area.layers.size()) - 1)].i);
-		Chips(layers, on, "pl:", "paint layer");
-		for (int i = 0; i < static_cast<int>(area.layers.size()); ++i) {
-			if (std::to_string(area.layers[i].i) == on) {
-				area.on = i;
-			}
-		}
-		IG::Separator();
-		IG::BeginChild("##paint");
-		Theme::Body();
 		IG::PushID(area.k.c_str());
-		DrawLayer(area, area.layers[area.on]);
+		for (auto& l : area.layers) {
+			DrawLayer(area, l);
+		}
 		IG::PopID();
-		IG::EndChild();
 	}
 
-	void DrawBody()
+	void DrawBody(float a_height)
 	{
 		if (!g_bodyReady) {
 			return;
@@ -940,7 +913,7 @@ namespace Lifecast::Panel::Smf::Skin
 		IG::TextDisabled("%s", !g_bodyPending.empty() ? fmt::format("Applying {}...", g_bodyPending).c_str() :
 		                       g_bodyCurrent.empty()  ? "Current: none" :
 		                                                fmt::format("Current: {}", g_bodyCurrent).c_str());
-		IG::BeginChild("##obody");
+		IG::BeginChild("##obody", IG::ImVec2{ 0.0f, a_height });
 		Theme::Body();
 		for (int i = 0; i < static_cast<int>(g_bodyNames.size()); ++i) {
 			const auto& name = g_bodyNames[i];
