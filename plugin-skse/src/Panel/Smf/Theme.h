@@ -34,6 +34,9 @@ namespace Lifecast::Panel::Smf::Theme
 
 	// A size of panel.css in screen pixels at the current scale.
 	float Px(float a_cssPx);
+	// The ImGui font size for a panel.css font size, with the current font:
+	// the one whose capital H is as tall as the page's (D321).
+	float TextPx(float a_cssPx);
 
 	// What the windows are, for the log line.
 	enum class Kind

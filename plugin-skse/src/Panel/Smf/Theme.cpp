@@ -158,8 +158,54 @@ namespace Lifecast::Panel::Smf::Theme
 			}
 		}
 
+		// The web backends draw the page at one screen pixel per CSS pixel, at
+		// 1920x1080 and at 2560x1440 alike (D321): the view's lengths are the
+		// CSS ones times the player's scale, with no screen factor of their own.
+		constexpr float kScreen = 1.0f;
+		// The page's capital letter is 0.72 of its CSS font size, as Prisma UI
+		// draws it (D321: 10 px for 13 and 14 px labels, 15 px for the 22 px
+		// title). ImGui sizes a font by its line (ascent minus descent), not by
+		// its em, so the same number is a smaller letter; the view sizes its
+		// text by the capital instead.
+		constexpr float kCapPerCssPx = 0.72f;
+
 		float g_scale = 1.0f;
 		float g_loggedScale[4] = { -1.0f, -1.0f, -1.0f, -1.0f };
+
+		// The capital H of a font, as a share of the size it was rasterized at;
+		// 0 when the font has no H. Asked once per font.
+		struct CapCache
+		{
+			const IG::ImFont* font = nullptr;
+			float             ratio = 0.0f;
+		};
+		CapCache g_caps[8]{};
+
+		float CapRatio(IG::ImFont* a_font)
+		{
+			if (!a_font || a_font->FontSize <= 0.0f) {
+				return 0.0f;
+			}
+			for (auto& c : g_caps) {
+				if (c.font == a_font) {
+					return c.ratio;
+				}
+			}
+			float ratio = 0.0f;
+			if (const auto* g = IG::ImFontManger::FindGlyphNoFallback(a_font, static_cast<IG::ImWchar>('H'))) {
+				ratio = (g->Y1 - g->Y0) / a_font->FontSize;
+			}
+			for (auto& c : g_caps) {
+				if (!c.font) {
+					c.font = a_font;
+					c.ratio = ratio;
+					spdlog::info("[smf] theme font '{}': size {:.1f} px, capital H {:.2f} px ({:.3f} of the size)",
+						a_font->ConfigData ? a_font->ConfigData->Name : "?", a_font->FontSize, ratio * a_font->FontSize, ratio);
+					break;
+				}
+			}
+			return ratio;
+		}
 
 		// The balance (cell O).
 		IG::ImGuiStyle g_before{};
@@ -214,7 +260,16 @@ namespace Lifecast::Panel::Smf::Theme
 
 	float Px(float a_cssPx)
 	{
-		return a_cssPx * g_scale;
+		return a_cssPx * g_scale * kScreen;
+	}
+
+	float TextPx(float a_cssPx)
+	{
+		const float ratio = CapRatio(IG::GetFont());
+		if (ratio <= 0.0f) {
+			return Px(a_cssPx);
+		}
+		return Px(a_cssPx) * kCapPerCssPx / ratio;
 	}
 
 	Scope::Scope(Kind a_kind)
@@ -225,7 +280,7 @@ namespace Lifecast::Panel::Smf::Theme
 		}
 		const auto o = Of(a_kind);
 		for (const auto& v : kVars) {
-			const float k = v.scaled ? g_scale : 1.0f;
+			const float k = v.scaled ? Px(1.0f) : 1.0f;
 			if (v.kind == VarKind::kVec2) {
 				IG::PushStyleVar(v.var, IG::ImVec2{ v.x * k, v.y * k });
 			} else if (v.var == IG::ImGuiStyleVar_WindowRounding) {
@@ -288,7 +343,7 @@ namespace Lifecast::Panel::Smf::Theme
 		IG::SetWindowFontScale(1.0f);
 		const float now = IG::GetFontSize();
 		if (now > 0.0f) {
-			IG::SetWindowFontScale(Px(a_cssPx) / now);
+			IG::SetWindowFontScale(TextPx(a_cssPx) / now);
 		}
 	}
 
@@ -298,7 +353,7 @@ namespace Lifecast::Panel::Smf::Theme
 		if (!font || !a_text) {
 			return;
 		}
-		const float size = Px(a_cssPx);
+		const float size = TextPx(a_cssPx);
 		const auto  dim = IG::ImFontManger::CalcTextSizeA(font, size, 1.0e9f, 0.0f, a_text, nullptr, nullptr);
 		const auto  at = IG::GetCursorScreenPos();
 		IG::Dummy(IG::ImVec2{ dim.x, dim.y });
@@ -344,13 +399,13 @@ namespace Lifecast::Panel::Smf::Theme
 		spdlog::info("[smf] theme {}: scale {:.2f} | colors {} | WindowPadding {:.1f}x{:.1f} WindowRounding {:.0f} "
 					 "WindowBorderSize {:.0f} FramePadding {:.1f}x{:.1f} FrameRounding {:.0f} FrameBorderSize {:.0f} "
 					 "ItemSpacing {:.1f}x{:.1f} ScrollbarSize {:.1f} ScrollbarRounding {:.0f} GrabRounding {:.0f} "
-					 "TabRounding {:.0f} PopupRounding {:.0f} ChildRounding {:.0f} | text {:.1f} px (font '{}' {:.1f} px, "
-					 "window scale {:.3f})",
+					 "TabRounding {:.0f} PopupRounding {:.0f} ChildRounding {:.0f} | text {:.1f} px, capital {:.1f} px (font '{}' "
+					 "{:.1f} px, window scale {:.3f})",
 			Name(a_kind), g_scale, colors, style->WindowPadding.x, style->WindowPadding.y, style->WindowRounding,
 			style->WindowBorderSize, style->FramePadding.x, style->FramePadding.y, style->FrameRounding,
 			style->FrameBorderSize, style->ItemSpacing.x, style->ItemSpacing.y, style->ScrollbarSize,
 			style->ScrollbarRounding, style->GrabRounding, style->TabRounding, style->PopupRounding, style->ChildRounding,
-			IG::GetFontSize(), fontName, BaseFontSize(), BaseFontSize() > 0.0f ? IG::GetFontSize() / BaseFontSize() : 0.0f);
+			IG::GetFontSize(), IG::GetFontSize() * CapRatio(font), fontName, BaseFontSize(), BaseFontSize() > 0.0f ? IG::GetFontSize() / BaseFontSize() : 0.0f);
 	}
 
 	void FrameStart()

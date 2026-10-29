@@ -133,7 +133,9 @@ namespace Lifecast::Panel::Smf
 		bool                                      g_card = false;
 		std::string                               g_cardKey = "F4";
 		std::atomic_bool                          g_hybrid = true;  // the default form (D289)
-		int                                       g_section = 0;
+		// The open category, or kSectionNone: the first open of the game shows
+		// no category, as belt.js does (D323); later opens keep the player's.
+		int                                       g_section = -1;
 		bool                                      g_slidersReady = false;
 		std::vector<Slider>                       g_sliders;
 		std::unordered_map<std::string, std::size_t> g_byKey;
@@ -898,6 +900,7 @@ namespace Lifecast::Panel::Smf
 		constexpr int kSectionBody = 6;
 		constexpr int kSectionPresets = 7;
 		constexpr int kSectionSettings = 8;
+		constexpr int kSectionNone = -1;
 
 		// The panel's size (panel.js): the bounds are a guard, the step the
 		// page's.
@@ -922,7 +925,7 @@ namespace Lifecast::Panel::Smf
 		void DrawCategories()
 		{
 			auto* dl = IG::GetWindowDrawList();
-			if (!SectionShown(g_section)) {
+			if (g_section != kSectionNone && !SectionShown(g_section)) {
 				g_section = 0;
 				Common::LayoutSoon();
 			}
@@ -954,9 +957,10 @@ namespace Lifecast::Panel::Smf
 						IG::ColorConvertFloat4ToU32(Theme::Color::Text()), 0.0f, 0);
 				}
 				Rect(kSectionRects[i]);
-				if (hit && g_section != i) {
-					g_section = i;
-					spdlog::info("[smf] view: section {}", kSectionRects[i] + 4);
+				if (hit) {
+					// belt.js: a second click on the open category closes the panel
+					g_section = g_section == i ? kSectionNone : i;
+					spdlog::info("[smf] view: section {}", g_section == kSectionNone ? "none (closed by its category)" : kSectionRects[i] + 4);
 					Common::LayoutSoon();
 				}
 			}
@@ -1614,7 +1618,9 @@ namespace Lifecast::Panel::Smf
 		const float col = std::round((std::min)(Theme::Px(430.0f), dw * 0.34f));      // --panel-col
 		const float panelH = std::round((std::min)(dh * 0.64f, dh - beltH - gap));    // --panel-tall, the panel always open
 		const float beltY = dh - beltH;
-		const float stageL = col + 2.0f * gap;
+		const bool  open = g_section != kSectionNone;
+		// .stage: the open small panel takes its width off the stage
+		const float stageL = (open ? col : 0.0f) + 2.0f * gap;
 		const float stageT = 2.0f * gap;
 		const float stageR = dw - 2.0f * gap;
 		const float stageB = beltY - 2.0f * gap;
@@ -1628,8 +1634,9 @@ namespace Lifecast::Panel::Smf
 				IG::ImVec2{ stageR, stageB }, IG::ColorConvertFloat4ToU32(Theme::Color::StageBorder()), 6.0f, 0, 1.0f);
 		}
 
-		// The small panel.
-		{
+		// The small panel, only while a category is open (.belt-panel).
+		Box panelBox{ "window", 0.0f, 0.0f, 0.0f, 0.0f };
+		if (open) {
 			const Theme::Scope theme(Theme::Kind::kPanel);
 			IG::SetNextWindowPos(IG::ImVec2{ 0.0f, beltY - panelH }, IG::ImGuiCond_Always);
 			IG::SetNextWindowSize(IG::ImVec2{ col, panelH }, IG::ImGuiCond_Always);
@@ -1637,6 +1644,7 @@ namespace Lifecast::Panel::Smf
 			Theme::Body();
 			Theme::LogWindow(Theme::Kind::kPanel);
 			f.boxes[f.count++] = WindowBox("panel");
+			panelBox = f.boxes[0];
 			g_clipBottom = f.boxes[0].y1;
 			auto* dl = IG::GetWindowDrawList();
 			const auto& b = f.boxes[0];
@@ -1754,8 +1762,11 @@ namespace Lifecast::Panel::Smf
 		f.drawn = true;
 		// undokeys.js: Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z - the text fields keep theirs
 		History::Keys(io->WantTextInput);
-		g_lastLayout = fmt::format("window {:.0f},{:.0f},{:.0f},{:.0f}; {}; {}; stage {:.0f},{:.0f},{:.0f},{:.0f}", f.boxes[0].x0,
-			f.boxes[0].y0, f.boxes[0].x1, f.boxes[0].y1, BoxText(f.boxes[1]), BoxText(f.boxes[2]), stageL, stageT, stageR, stageB);
+		const int first = open ? 1 : 0;
+		g_lastLayout = open ? fmt::format("window {:.0f},{:.0f},{:.0f},{:.0f}", panelBox.x0, panelBox.y0, panelBox.x1, panelBox.y1) :
+		                      std::string("window none");
+		g_lastLayout += fmt::format("; {}; {}; stage {:.0f},{:.0f},{:.0f},{:.0f}", BoxText(f.boxes[first]),
+			BoxText(f.boxes[first + 1]), stageL, stageT, stageR, stageB);
 		if (g_havePopup) {
 			g_lastLayout += "; " + BoxText(g_popup);
 		}
@@ -1834,7 +1845,11 @@ namespace Lifecast::Panel::Smf
 					 "turn {:.1f} distance {:.1f}, zoom asked {} | received {}, not drawn {}, sent {}",
 			a_what, g_visible, g_card, g_hybrid ? "hybrid" : "all", g_sliders.size(), g_tabs.size(), g_slidersReady,
 			g_stage.ready, g_stage.free, g_stage.turn, g_stage.distance, g_zooms, g_received, g_ignored, g_sent);
-		spdlog::info("[smf] view {}: section {}", a_what, g_section);
+		if (g_section == kSectionNone) {
+			spdlog::info("[smf] view {}: section none", a_what);
+		} else {
+			spdlog::info("[smf] view {}: section {}", a_what, g_section);
+		}
 		spdlog::info("[smf] view stage ({}): ready {}, free {}, forced {}, lock {}, tilt {} ({:.1f} deg), turn {:.1f}, "
 					 "distance {:.1f}, lift {:.1f}, pan {:.1f}, visible {}, {} drag(s) ({} from the game's input), {} wheel(s)",
 			a_what, g_stage.ready, g_stage.free, g_stage.forced, g_stage.lock, g_stage.tilt, g_stage.tiltDeg, g_stage.turn,

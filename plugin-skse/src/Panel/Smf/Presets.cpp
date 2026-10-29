@@ -960,7 +960,10 @@ namespace Lifecast::Panel::Smf::Presets
 	void DrawFinish(float a_width)
 	{
 		const float button = IG::CalcTextSize("Finish").x + IG::GetStyle()->FramePadding.x * 2.0f;
-		const float field = (std::min)(Theme::Px(200.0f), (std::max)(a_width - button - Theme::Px(8.0f), Theme::Px(80.0f)));
+		// .finish-row: the belt's 1fr cell, up to 460 px; the field takes what
+		// the button leaves (flex: 1), as the page does (D322).
+		const float row = (std::min)(a_width, Theme::Px(460.0f));
+		const float field = (std::max)(row - button - IG::GetStyle()->ItemSpacing.x, Theme::Px(80.0f));
 		IG::BeginDisabled(g_sent || g_readable == 0);
 		IG::SetNextItemWidth(field);
 		if (IG::InputTextWithHint("##finish-name", "Name", g_name, sizeof(g_name), IG::ImGuiInputTextFlags_CallbackCharFilter,
