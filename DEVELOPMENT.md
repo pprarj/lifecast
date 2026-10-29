@@ -97,6 +97,13 @@ counts as the presence of this one. To run it from a source build, create that
 file (any text) or set `"backend": "smf"` in `settings.json`. A forced `"smf"`
 without the framework installed does not fall back to another backend.
 
+The view's typeface is not part of this repository. SKSE Menu Framework loads
+every TTF in `Data/SKSE/Plugins/Fonts/` at startup, and the view uses the one
+named `lifecast-sans.ttf` when it is there; the release ships the Selawik font
+(Microsoft, SIL Open Font License 1.1) under that name, with its license beside
+it. Without it the view draws with the framework's own font. With either, the
+text is sized by the font's capital height, aiming at the web panel's letters.
+
 The framework's header is vendored under `plugin-skse/extern/SKSEMenuFramework/`
 with its license and an `ORIGEM.md`.
 
