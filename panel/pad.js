@@ -19,6 +19,20 @@
 // In a list of rows that are not buttons (the OBody list) up and down walk the
 // rows one by one and A is the row's click.
 //
+// In an open colour picker (D327) the ring is on one of its three parts:
+//
+//   square              D-pad and left stick move the point (right = more
+//                       saturated, up = lighter); a held or repeated press
+//                       takes bigger steps, the stick glides
+//   hue bar             left / right move the hue; up the square, down the hex
+//   hex                 A types it, as its click; up the hue bar
+//   Y                   the next part: square, hue bar, hex
+//   A (square, bar), B  close the picker; the ring goes back to what opened it
+//
+// A on a colour chip opens its picker with the ring in the square. The moves
+// go through the picker's own report(), as its drag: one final colour and
+// one undo entry per edit.
+//
 // Every action goes through the path the mouse already uses - the button's
 // own click, the slider's own < >, the stage's drag - so nothing here writes
 // a value of its own. The ring is a class (.pad-focus), not the browser's
@@ -67,6 +81,9 @@ const LifecastPad = (() => {
       }
       // A list's entries live inside the row that owns it, but they are what
       // the controller walks while the list is open.
+      // The Hair Color swatches live inside their row too, and stay out of
+      // this list: a move across the page would find them from far off. They
+      // are walked from their row (swatchGo, D327).
       if (!el.classList.contains("slider") && el.closest(".slider") && !el.matches(TEXT) && !el.closest(".listpop")) {
         continue;
       }
@@ -294,10 +311,223 @@ const LifecastPad = (() => {
     return best;
   }
 
-  function go(a_dir) {
+  // --- the colour picker (D327) ---
+
+  const SQUARE_STEP = 0.02;       // a D-pad press in the square, of its width or height
+  const SQUARE_STEP_MAX = 0.1;
+  const HUE_STEP = 3 / 360;       // a D-pad press on the hue bar
+  const HUE_STEP_MAX = 15 / 360;
+  const STEP_AGAIN_MS = 350;      // a press this soon after one the same way counts as held
+  const GLIDE_DEAD = 0.2;         // the left stick in the picker: past this it moves,
+  const GLIDE_SQUARE = 0.7;       // at full tilt this much of the square a second,
+  const GLIDE_HUE = 0.5;          // this much of the hue bar a second,
+  const GLIDE_RAMP_MS = 1200;     // reached after this long held (from 35%)
+  const GLIDE_TICK_MS = 16;       // a timer, not a frame: it runs the same under every backend
+
+  const openers = new WeakMap();  // picker -> the chip or row that opened it
+  const nudge = { dir: null, at: 0, streak: 0 };
+  const glide = { x: 0, y: 0, frame: null, at: 0, since: 0 };
+
+  function pickerOf(a_el) {
+    const w = a_el && a_el.closest ? a_el.closest(".picker") : null;
+    return w && w.lifecastPad ? w : null;
+  }
+
+  function partOf(a_el) {
+    const w = pickerOf(a_el);
+    if (!w) {
+      return null;
+    }
+    const p = w.lifecastPad;
+    return a_el === p.square ? "square" : a_el === p.hue ? "hue" : p.hex.contains(a_el) ? "hex" : null;
+  }
+
+  function openPickers() {
+    return Array.from(document.querySelectorAll(".picker")).filter((w) => !w.hidden);
+  }
+
+  // Clicks what opens a picker; the one that is open now and was not before
+  // is its picker, and the ring goes into its square.
+  function openPicker(a_click, a_owner) {
+    const before = new Set(openPickers());
+    a_click();
+    const opened = openPickers().find((w) => !before.has(w) && w.lifecastPad);
+    if (!opened) {
+      return false;
+    }
+    openers.set(opened, a_owner);
+    setCur(opened.lifecastPad.square);
+    return true;
+  }
+
+  // The owner of a closed list or picker, for the ring to go back to.
+  function ownerOf(a_w) {
+    const opener = openers.get(a_w);
+    if (opener && document.contains(opener) && !hidden(opener)) {
+      return opener;
+    }
+    const owner = a_w.closest(".slider") ||
+      (a_w.closest(".section") && a_w.closest(".section").querySelector(".list-chip, .swatch, .slider"));
+    return owner && !hidden(owner) ? owner : first(targets());
+  }
+
+  function closePicker(a_w) {
+    a_w.lifecastPad.close();
+    if (cur && a_w.contains(cur)) {
+      setCur(ownerOf(a_w));
+    }
+  }
+
+  // A press the same way as the last one, held or soon after it, takes a
+  // bigger step: twice the step every two presses, up to the most.
+  function step(a_dir, a_repeat, a_base, a_max) {
+    const now = performance.now();
+    if (a_dir === nudge.dir && (a_repeat || now - nudge.at < STEP_AGAIN_MS)) {
+      nudge.streak += 1;
+    } else {
+      nudge.streak = 0;
+    }
+    nudge.dir = a_dir;
+    nudge.at = now;
+    return Math.min(a_max, a_base * Math.pow(2, Math.floor(nudge.streak / 2)));
+  }
+
+  const PARTS = ["square", "hue", "hex"];
+
+  function toPart(a_w, a_part) {
+    const p = a_w.lifecastPad;
+    setCur(a_part === "square" ? p.square : a_part === "hue" ? p.hue : p.hex);
+    last = "part " + a_part;
+  }
+
+  function pickerGo(a_dir, a_repeat) {
+    const w = pickerOf(cur);
+    const part = partOf(cur);
+    const p = w.lifecastPad;
+    if (part === "square") {
+      const d = step(a_dir, a_repeat, SQUARE_STEP, SQUARE_STEP_MAX);
+      const dx = a_dir === "right" ? d : a_dir === "left" ? -d : 0;
+      const dy = a_dir === "up" ? d : a_dir === "down" ? -d : 0;
+      p.nudge("square", dx, dy);
+      last = "square " + a_dir;
+    } else if (part === "hue") {
+      if (a_dir === "left" || a_dir === "right") {
+        const d = step(a_dir, a_repeat, HUE_STEP, HUE_STEP_MAX);
+        p.nudge("hue", a_dir === "right" ? d : -d);
+        last = "hue " + a_dir;
+      } else if (!a_repeat) {
+        toPart(w, a_dir === "up" ? "square" : "hex");
+      }
+    } else if (a_dir === "up" && !a_repeat) {
+      toPart(w, "hue");
+    } else {
+      last = "edge " + a_dir;
+    }
+  }
+
+  function glideAxis(a_v) {
+    const m = Math.abs(a_v);
+    return m <= GLIDE_DEAD ? 0 : Math.sign(a_v) * (m - GLIDE_DEAD) / (1 - GLIDE_DEAD);
+  }
+
+  function glideFrame() {
+    const a_now = performance.now();
+    const part = valid() ? partOf(cur) : null;
+    if ((!glide.x && !glide.y) || (part !== "square" && part !== "hue")) {
+      glide.frame = null;
+      glide.at = 0;
+      return;
+    }
+    if (!glide.at) {
+      glide.since = a_now;
+    }
+    const dt = glide.at ? Math.min(0.1, (a_now - glide.at) / 1000) : 0;
+    glide.at = a_now;
+    const ramp = Math.min(1, 0.35 + 0.65 * (a_now - glide.since) / GLIDE_RAMP_MS);
+    const p = pickerOf(cur).lifecastPad;
+    if (dt && part === "square") {
+      p.nudge("square", glideAxis(glide.x) * GLIDE_SQUARE * ramp * dt, glideAxis(glide.y) * GLIDE_SQUARE * ramp * dt);
+    } else if (dt) {
+      p.nudge("hue", glideAxis(glide.x) * GLIDE_HUE * ramp * dt);
+    }
+    glide.frame = setTimeout(glideFrame, GLIDE_TICK_MS);
+  }
+
+  // The left stick in the square or on the hue bar glides the point; true
+  // when it did (elsewhere it moves the ring).
+  function pickerStick(a_x, a_y) {
+    const part = valid() ? partOf(cur) : null;
+    if (part !== "square" && part !== "hue") {
+      glide.x = 0;
+      glide.y = 0;
+      return false;
+    }
+    const was = glide.x || glide.y;
+    glide.x = glideAxis(a_x) ? a_x : 0;
+    glide.y = part === "square" && glideAxis(a_y) ? a_y : 0;
+    if ((glide.x || glide.y) && !was) {
+      presses += 1;
+      if (!shown) {
+        show();
+      }
+      last = "glide " + part;
+    }
+    if ((glide.x || glide.y) && glide.frame === null) {
+      glide.at = 0;
+      glide.frame = setTimeout(glideFrame, 0);
+    }
+    return true;
+  }
+
+  // Swatches inside a row (Hair Color): down on the row goes into them, on
+  // the one in use or the first; inside, the ring moves among them only; up
+  // from their top line is the row again, down from the bottom one leaves as
+  // from the row; left and right stop at the ends.
+  function rowSwatches(a_row) {
+    return Array.from(a_row.querySelectorAll(".swatch")).filter((el) => !hidden(el));
+  }
+
+  function swatchGo(a_dir) {
+    if (cur.classList.contains("slider") && a_dir === "down") {
+      const sw = rowSwatches(cur);
+      if (sw.length) {
+        setCur(sw.find((el) => el.classList.contains("selected")) || first(sw));
+        last = "swatch in";
+        return true;
+      }
+      return false;
+    }
+    const row = cur.classList.contains("swatch") ? cur.closest(".slider") : null;
+    if (!row) {
+      return false;
+    }
+    const next = nearestIn(a_dir, rowSwatches(row), 1);
+    if (next) {
+      setCur(next);
+      last = "swatch " + a_dir;
+    } else if (a_dir === "up") {
+      setCur(row);
+      last = "swatch out";
+    } else if (a_dir === "down") {
+      return false;
+    } else {
+      show();
+      last = "edge " + a_dir;
+    }
+    return true;
+  }
+
+  function go(a_dir, a_repeat) {
     if (!shown && valid()) {
       show();
       last = "show";
+      return;
+    }
+    if (valid() && partOf(cur)) {
+      pickerGo(a_dir, !!a_repeat);
+      return;
+    }
+    if (valid() && swatchGo(a_dir)) {
       return;
     }
     // Left and right on a slider are its < and >: the same click the mouse makes.
@@ -343,11 +573,37 @@ const LifecastPad = (() => {
       last = "show";
       return;
     }
+    // In the picker: A types the hex, and closes it from the square or the bar.
+    const part = partOf(cur);
+    if (part === "hex") {
+      pickerOf(cur).lifecastPad.typeHex();
+      last = "type hex";
+      return;
+    }
+    if (part) {
+      closePicker(pickerOf(cur));
+      last = "close picker";
+      return;
+    }
+    // A colour chip of its own (a tint or Paint layer): its click, and the
+    // ring into the picker that opened.
+    if (cur.matches(".picker-chip")) {
+      last = openPicker(() => cur.click(), cur) ? "open picker" : "click";
+      return;
+    }
     if (cur.classList.contains("slider")) {
       // A row that offers a list or a colour opens it; a plain slider has
       // nothing to click (left and right are its < and >).
       const opener = cur.querySelector(".list-chip, .picker-chip");
       if (opener && !hidden(opener)) {
+        if (opener.matches(".picker-chip") && openPicker(() => opener.click(), cur)) {
+          last = "open picker";
+          return;
+        }
+        if (opener.matches(".picker-chip")) {
+          last = "open";
+          return;
+        }
         opener.click();
         const pop = cur.querySelector(".listpop");
         if (pop && !pop.hidden) {
@@ -381,21 +637,27 @@ const LifecastPad = (() => {
   function back() {
     const active = document.activeElement;
     if (active && active.matches && active.matches(TEXT)) {
+      // The picker's hex field goes away when it loses the focus (its blur
+      // applies a valid hex, as a click elsewhere): the ring stays on the hex.
+      const hex = pickerOf(active) ? pickerOf(active).lifecastPad.hex : null;
       active.blur();
-      setCur(active);
+      setCur(hex || active);
       last = "leave field";
       return;
     }
     const open = Array.from(document.querySelectorAll(".listpop, .picker")).filter((w) => !w.hidden);
     if (open.length) {
       for (const w of open) {
-        // The same as their own close: the list's close() and the picker's
-        // toggle only flip hidden.
-        w.hidden = true;
-        if (cur && w.contains(cur)) {
-          const owner = w.closest(".slider") ||
-            (w.closest(".section") && w.closest(".section").querySelector(".list-chip, .swatch, .slider"));
-          setCur(owner && !hidden(owner) ? owner : first(targets()));
+        // The same as their own close: the list's close() only flips hidden;
+        // a picker also ends a controller edit, with its final colour (D327).
+        const had = cur && w.contains(cur);
+        if (w.lifecastPad) {
+          w.lifecastPad.close();
+        } else {
+          w.hidden = true;
+        }
+        if (had) {
+          setCur(ownerOf(w));
         }
       }
       last = "close";
@@ -416,6 +678,10 @@ const LifecastPad = (() => {
     const cats = Array.from(document.querySelectorAll(".belt-cat")).filter((b) => !b.hidden && !b.disabled);
     if (!cats.length) {
       return;
+    }
+    // A picker the ring is in closes first, with its final colour (D327).
+    if (valid() && pickerOf(cur)) {
+      closePicker(pickerOf(cur));
     }
     const at = cats.findIndex((b) => b.classList.contains("is-on"));
     const next = at < 0 ? (a_step > 0 ? cats[0] : cats[cats.length - 1])
@@ -459,6 +725,12 @@ const LifecastPad = (() => {
   }
 
   function onLeft(a_x, a_y) {
+    if (pickerStick(a_x, a_y)) {
+      clearTimeout(stick.timer);
+      stick.timer = null;
+      stick.dir = null;
+      return;
+    }
     const dir = stickDir(a_x, a_y);
     if (dir === stick.dir) {
       return;
@@ -483,6 +755,8 @@ const LifecastPad = (() => {
     stick.timer = null;
     stick.dir = null;
     turn.x = 0;
+    glide.x = 0;
+    glide.y = 0;
   }
 
   const DPAD = { DUp: "up", DDown: "down", DLeft: "left", DRight: "right" };
@@ -509,7 +783,7 @@ const LifecastPad = (() => {
     }
     if (DPAD[a_data.b]) {
       presses += 1;
-      go(DPAD[a_data.b]);
+      go(DPAD[a_data.b], !down);
     } else if (!down) {
       // Only the directions repeat; A, B and the bumpers act once per press.
     } else if (a_data.b === "A") {
@@ -518,6 +792,17 @@ const LifecastPad = (() => {
     } else if (a_data.b === "B") {
       presses += 1;
       back();
+    } else if (a_data.b === "Y") {
+      // In a picker, its next part; nothing elsewhere.
+      if (valid() && partOf(cur)) {
+        presses += 1;
+        if (!shown) {
+          show();
+          last = "show";
+        } else {
+          toPart(pickerOf(cur), PARTS[(PARTS.indexOf(partOf(cur)) + 1) % PARTS.length]);
+        }
+      }
     } else if (a_data.b === "LB" || a_data.b === "RB") {
       presses += 1;
       category(a_data.b === "RB" ? 1 : -1);
@@ -577,6 +862,7 @@ const LifecastPad = (() => {
       typing: !!(active && active.matches && active.matches(TEXT)),
       open: Array.from(document.querySelectorAll(".listpop, .picker")).filter((w) => !w.hidden).length,
       stops: targets().length,
+      picker: valid() && pickerOf(cur) ? Object.assign({ part: partOf(cur) }, pickerOf(cur).lifecastPad.hsv()) : null,
     };
   }
 

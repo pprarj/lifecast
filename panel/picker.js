@@ -65,6 +65,10 @@ const LifecastPicker = (() => {
 
     const hsv = { h: 0, s: 0, v: 0 };
     const state = { dragging: false, timer: null, lastSent: 0, last: null, editing: null };
+    // A controller edit (pad.js, D327): from its first move to the close, it
+    // is one gesture, like a drag - refresh() bows out and the close reports
+    // the one final colour.
+    const pad = { active: false };
 
     function current() {
       return hsvToHex(hsv.h, hsv.s, hsv.v);
@@ -74,8 +78,7 @@ const LifecastPicker = (() => {
     // now ending, and refresh() - which is where a colour from the DLL
     // arrives - is its only other writer. refresh() bows out while dragging,
     // so the "before" survives the echoes that land mid-drag.
-    function commit(a_hex) {
-      const before = state.last;
+    function commit(before, a_hex) {
       state.last = a_hex;
       if (typeof before !== "string") {
         return;
@@ -172,6 +175,7 @@ const LifecastPicker = (() => {
       if (state.editing || state.dragging) {
         return;
       }
+      padEnd();
       const field = LifecastControls.el("input", "picker-hex-edit");
       field.type = "text";
       field.value = current().slice(1);
@@ -208,9 +212,12 @@ const LifecastPicker = (() => {
         state.timer = null;
       }
       state.lastSent = performance.now();
+      // The "before" is read ahead of the send: a send that repaints its
+      // control (tints.js) calls refresh() back, which rewrites state.last.
+      const before = state.last;
       a_opts.send(current(), final);
       if (final) {
-        commit(current());
+        commit(before, current());
       }
     }
 
@@ -231,6 +238,8 @@ const LifecastPicker = (() => {
         moved();
       };
       canvas.addEventListener("pointerdown", (e) => {
+        // A drag over a controller edit takes it over: its "before" stays.
+        pad.active = false;
         state.dragging = true;
         canvas.setPointerCapture(e.pointerId);
         at(e);
@@ -259,7 +268,7 @@ const LifecastPicker = (() => {
     // wins over a value from before it moved. Hue is kept for greys, where
     // the colour alone does not say it.
     function refresh() {
-      if (state.dragging || wrap.hidden) {
+      if (state.dragging || pad.active || wrap.hidden) {
         return;
       }
       const next = hexToHsv(a_opts.get());
@@ -276,6 +285,9 @@ const LifecastPicker = (() => {
     // the small panel a chip near the bottom would open it out of sight
     // (E4, D120 - nothing floats over the stage).
     function toggle() {
+      if (!wrap.hidden) {
+        padEnd();
+      }
       wrap.hidden = !wrap.hidden;
       refresh();
       if (!wrap.hidden) {
@@ -283,7 +295,58 @@ const LifecastPicker = (() => {
       }
     }
 
-    return { el: wrap, toggle: toggle, refresh: refresh, dragging: () => state.dragging };
+    // The controller's side (pad.js, D327). It moves the same hsv the drag
+    // moves and reports through the same moved() / report(): nothing here
+    // sends a colour of its own.
+    //   nudge("square", dx, dy): saturation += dx, value += dy, 0..1 each
+    //   nudge("hue", dx): hue += dx * 360, 0..359, no wrap (as the bar)
+    function padNudge(a_part, a_dx, a_dy) {
+      if (wrap.hidden || state.dragging || state.editing) {
+        return;
+      }
+      pad.active = true;
+      if (a_part === "square") {
+        hsv.s = clamp01(hsv.s + a_dx);
+        hsv.v = clamp01(hsv.v + (a_dy || 0));
+      } else if (a_part === "hue") {
+        hsv.h = Math.min(359.99, Math.max(0, hsv.h + a_dx * 360));
+      } else {
+        return;
+      }
+      moved();
+    }
+
+    // The end of a controller edit: the one final colour and the one history
+    // entry, as a drag's end. An edit that never moved sends nothing.
+    function padEnd() {
+      if (!pad.active) {
+        return;
+      }
+      pad.active = false;
+      report(true);
+    }
+
+    function padClose() {
+      padEnd();
+      if (state.editing) {
+        endHexEdit(null);
+      }
+      wrap.hidden = true;
+    }
+
+    wrap.lifecastPad = {
+      square: square,
+      hue: hue,
+      hex: hexLabel,
+      nudge: padNudge,
+      end: padEnd,
+      close: padClose,
+      typeHex: beginHexEdit,
+      editing: () => !!state.editing,
+      hsv: () => ({ h: hsv.h, s: hsv.s, v: hsv.v, hex: current(), pad: pad.active }),
+    };
+
+    return { el: wrap, toggle: toggle, refresh: refresh, dragging: () => state.dragging || pad.active };
   }
 
   return { create: create };
