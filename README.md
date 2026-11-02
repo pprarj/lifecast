@@ -4,9 +4,11 @@
 
 Lifecast is a modern interface for RaceMenu's character editor. It draws its panel with Prisma UI, with Magelight UI, or with SKSE Menu Framework, and ships one download for each.
 
-**Status: 1.6.0.** Version 1.4.0, the last one built on Meridian UI, stays on
+**Status: 1.6.1** (Prisma UI and Magelight UI downloads; the SKSE Menu Framework download is still 1.6.0, unchanged). Version 1.4.0, the last one built on Meridian UI, stays on
 [Nexus Mods](https://www.nexusmods.com/skyrimspecialedition/mods/193940) as an old file. Bug reports
 go to the Bugs tab there, or to this repository's issues.
+
+With a controller connected the game turns the mouse off, in menus and in RaceMenu itself. If you want the mouse back while a controller is connected, [Auto Input Switch](https://www.nexusmods.com/skyrimspecialedition/mods/54309) does that; it is a recommendation, not a requirement.
 
 ## Requirements
 
