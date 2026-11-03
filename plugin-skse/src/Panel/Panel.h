@@ -87,6 +87,11 @@ namespace Lifecast::Panel
 	void SetVisible(bool a_visible);
 	bool IsVisible();
 
+	// One line with the backend's focus state, logged only while the page
+	// exists and is hidden. For the moments after the editor, when the panel
+	// is gone from the screen and another menu wants the keyboard.
+	void LogHiddenState(const char* a_what);
+
 	// RaceMenu's film is in front: the page stays on screen but without focus,
 	// so the keyboard and the mouse belong to the film, and the page draws only a
 	// small card saying which key brings the panel back. Not "visible" in the

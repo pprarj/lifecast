@@ -554,6 +554,10 @@ namespace Lifecast::Panel::Switcher
 					} else {
 						OnBoxClosed();
 					}
+				} else if (a_event && a_event->menuName == RE::Console::MENU_NAME) {
+					// Where the focus is when the console wants the keyboard,
+					// with the panel off the screen.
+					Panel::LogHiddenState(a_event->opening ? "console opened, panel hidden" : "console closed, panel hidden");
 				}
 				return RE::BSEventNotifyControl::kContinue;
 			}

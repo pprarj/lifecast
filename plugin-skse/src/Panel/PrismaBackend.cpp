@@ -230,11 +230,15 @@ namespace Lifecast::Panel
 				// Hidden is also unfocused, as on Meridian. Unfocus only when the
 				// panel has or wants focus: Prisma's Unfocus closes the focus
 				// menu of every Prisma view, not just this one.
-				if (g_wantFocus || HasFocusNow()) {
+				const bool want = g_wantFocus;
+				const bool had = HasFocusNow();
+				if (want || had) {
 					g_wantFocus = false;
 					g_api->Unfocus(g_view);
 				}
 				g_api->Hide(g_view);
+				spdlog::info("[prisma] hide: Unfocus {} (wantFocus {}, HasFocus {} before); Unfocus returns nothing to read",
+					want || had ? "issued" : "not issued", want, had);
 			}
 
 			void SetFocused(bool a_focused) override

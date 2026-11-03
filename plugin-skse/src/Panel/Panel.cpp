@@ -203,6 +203,23 @@ namespace Lifecast::Panel
 			}
 		}
 
+		// A backend applies hide and unfocus late (Prisma), so the read in the
+		// same call as the hide does not say where the focus ended up. This
+		// one is taken off the game thread's clock and logged on it.
+		constexpr auto kLateRead = std::chrono::milliseconds(500);
+
+		void LogState(const char* a_what);
+
+		void LogStateLater(const char* a_what)
+		{
+			std::thread([a_what]() {
+				std::this_thread::sleep_for(kLateRead);
+				if (auto* tasks = SKSE::GetTaskInterface()) {
+					tasks->AddTask([a_what]() { LogState(a_what); });
+				}
+			}).detach();
+		}
+
 		void LogState(const char* a_what)
 		{
 			if (auto* b = Live()) {
@@ -419,6 +436,9 @@ namespace Lifecast::Panel
 		b->SetVisible(a_visible);
 		g_visible = a_visible;
 		LogState(a_visible ? "shown" : "hidden");
+		if (!a_visible) {
+			LogStateLater("hidden, read 500 ms later");
+		}
 
 		Bridge::Send("visibility", { { "visible", a_visible } });
 	}
@@ -426,6 +446,13 @@ namespace Lifecast::Panel
 	bool IsVisible()
 	{
 		return Live() && g_visible;
+	}
+
+	void LogHiddenState(const char* a_what)
+	{
+		if (Live() && !g_visible && !g_card) {
+			LogState(a_what);
+		}
 	}
 
 	void ShowCard(const char* a_key)
