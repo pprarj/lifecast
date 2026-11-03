@@ -363,6 +363,24 @@ namespace Lifecast::Panel
 		return g_backend ? g_backend->Name() : "none";
 	}
 
+	const char* PackageName()
+	{
+		const std::string_view name = BackendName();
+		if (name == "prisma") {
+			return "Prisma UI";
+		}
+		if (name == "magelight") {
+			return "Magelight UI";
+		}
+		if (name == "smf") {
+			return "SKSE Menu Framework";
+		}
+		if (name == "meridian") {
+			return "Meridian UI";
+		}
+		return "no backend";
+	}
+
 	bool Ensure()
 	{
 		if (!g_chosen) {

@@ -10,7 +10,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     Lifecast
-    VERSION 0.1.0
+    VERSION 1.6.2
     LANGUAGES CXX
 )
 
@@ -67,6 +67,7 @@ add_commonlibsse_plugin(
     AUTHOR "Awrawra"
     SOURCES
         src/plugin.cpp
+        src/PluginDeclaration.cpp
         src/Core/ListSig.cpp
         src/Core/Log.cpp
         src/Core/MeridianLink.cpp
@@ -116,6 +117,15 @@ add_commonlibsse_plugin(
         src/Preset/Load.cpp
         src/Preset/Save.cpp
 )
+
+# Drop the generated SKSE declaration (D328). It hardcodes
+# StructCompatibility::Independent and cannot express the Address Library
+# format 5 bit that runtime 1.7.x requires; src/PluginDeclaration.cpp replaces
+# it. Leaving both would fail to link on SKSEPlugin_Version. The build output is
+# the check: __LifecastPlugin.cpp must NOT appear among the compiled files.
+get_target_property(lifecast_sources ${PROJECT_NAME} SOURCES)
+list(REMOVE_ITEM lifecast_sources "${CMAKE_CURRENT_BINARY_DIR}/__${PROJECT_NAME}Plugin.cpp")
+set_target_properties(${PROJECT_NAME} PROPERTIES SOURCES "${lifecast_sources}")
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
 

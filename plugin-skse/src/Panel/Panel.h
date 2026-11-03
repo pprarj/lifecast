@@ -54,6 +54,10 @@ namespace Lifecast::Panel
 	// "prisma", "magelight", "meridian", or "none".
 	const char* BackendName();
 
+	// The framework's display name, as the packages are called: "Prisma UI",
+	// "Magelight UI", "SKSE Menu Framework", "Meridian UI", or "no backend".
+	const char* PackageName();
+
 	// A backend was chosen. Without one the editing modules are not
 	// installed: there is no page for them to talk to.
 	bool HasBackend();
