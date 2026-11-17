@@ -220,6 +220,41 @@ namespace Lifecast::Core::SkeeLink
 		return true;
 	}
 
+	BodyWeight BodyMorphState(RE::Actor* a_actor)
+	{
+		// Not BodyMorph(): that one warns on every call, and this runs on every
+		// weight step the panel sends.
+		auto*      map = GetInterfaceMap();
+		auto*      iface = map ? map->QueryInterface("BodyMorph") : nullptr;
+		const auto version = iface ? iface->GetVersion() : 0u;
+		if (!a_actor || !iface || version < kBodyMorphFloor) {
+			static bool s_warned = false;
+			if (!s_warned) {
+				s_warned = true;
+				spdlog::warn("[skee] body morph state NOT read: actor {}, BodyMorph interface {}, version {} (floor {}); written once",
+					static_cast<const void*>(a_actor), static_cast<const void*>(iface), version, kBodyMorphFloor);
+			}
+			return BodyWeight::kNoInterface;
+		}
+		auto* morphs = static_cast<Skee::IBodyMorphInterface*>(iface);
+		// The same first-base cast as the readers, for the same reason.
+		auto* refr = reinterpret_cast<Skee::TESObjectREFR*>(a_actor);
+		return morphs->HasMorphs(refr) ? BodyWeight::kHasMorphs : BodyWeight::kNoMorphs;
+	}
+
+	const char* ToString(BodyWeight a_state)
+	{
+		switch (a_state) {
+		case BodyWeight::kNoInterface:
+			return "no interface";
+		case BodyWeight::kNoMorphs:
+			return "no morphs";
+		case BodyWeight::kHasMorphs:
+			return "has morphs";
+		}
+		return "?";
+	}
+
 	namespace
 	{
 		Skee::IPresetInterface* PresetIface()

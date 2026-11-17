@@ -76,6 +76,22 @@ namespace Lifecast::Core::SkeeLink
 	// What was called is returned, not what changed on screen.
 	bool ApplyBodyMorphs(RE::Actor* a_actor);
 
+	// D330 - the weight slider, live. Whether a_actor carries SKEE body
+	// morphs (HasMorphs). A morphed body keeps showing the geometry SKEE
+	// morphed for the old weight until its 3D is rebuilt, so the caller picks
+	// the rebuild only when this answers kHasMorphs. With no BodyMorph
+	// interface (or one older than the floor) the warning is written once,
+	// not on every slider step.
+	enum class BodyWeight
+	{
+		kNoInterface,
+		kNoMorphs,
+		kHasMorphs,
+	};
+
+	BodyWeight BodyMorphState(RE::Actor* a_actor);
+	const char* ToString(BodyWeight a_state);
+
 	// E22.3 - the RaceMenu's own preset route (IPresetInterface, "Preset").
 	// QueryInterface("Preset") answered null once in this tree, so every call
 	// here reports whether the interface is there and does nothing when it is

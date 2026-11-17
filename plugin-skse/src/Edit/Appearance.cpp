@@ -5,6 +5,7 @@
 
 #include "Core/ListSig.h"
 #include "Core/RaceMenuSync.h"
+#include "Core/SkeeLink.h"
 #include "Edit/Session.h"
 #include "Panel/Bridge.h"
 #include "Panel/RaceMenuFilm.h"
@@ -452,13 +453,24 @@ namespace Lifecast::Edit::Appearance
 				return;
 			}
 			const auto start = Clock::now();
-			process->Set3DUpdateFlag(static_cast<RE::RESET_3D_FLAGS>(
-				static_cast<std::uint32_t>(RE::RESET_3D_FLAGS::kSkin) |
-				static_cast<std::uint32_t>(RE::RESET_3D_FLAGS::kModel)));
-			process->Update3DModel(player);
+			// D330: a body with SKEE morphs keeps the geometry SKEE morphed for
+			// the old weight through the skin and model update; only a rebuilt
+			// 3D takes the new weight, and SKEE morphs it again when it attaches.
+			// A body without morphs keeps the lighter update it always had.
+			const auto morphs = Core::SkeeLink::BodyMorphState(player);
+			const char* how = "skin and model update";
+			if (morphs == Core::SkeeLink::BodyWeight::kHasMorphs) {
+				player->DoReset3D(true);
+				how = "3D reset";
+			} else {
+				process->Set3DUpdateFlag(static_cast<RE::RESET_3D_FLAGS>(
+					static_cast<std::uint32_t>(RE::RESET_3D_FLAGS::kSkin) |
+					static_cast<std::uint32_t>(RE::RESET_3D_FLAGS::kModel)));
+				process->Update3DModel(player);
+			}
 			g_lastWeight = Clock::now();
 			const auto us = std::chrono::duration_cast<std::chrono::microseconds>(g_lastWeight - start).count();
-			spdlog::info("[look] weight shown: skin and model update took {} us", us);
+			spdlog::info("[look] weight shown: {} took {} us (body morphs: {})", how, us, Core::SkeeLink::ToString(morphs));
 		}
 
 		void OnTick()
